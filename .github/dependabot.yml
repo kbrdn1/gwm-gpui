@@ -1,0 +1,39 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Paris"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "chore"
+    commit-message:
+      prefix: "⬆️ chore(deps)"
+      include: "scope"
+    groups:
+      # The two crates are one snapshot of Zed: they only move together.
+      gpui:
+        patterns:
+          - "gpui-pre*"
+      serde-stack:
+        patterns:
+          - "serde*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Europe/Paris"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "⬆️ chore(ci)"
