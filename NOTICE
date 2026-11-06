@@ -1,0 +1,8 @@
+The UI uses Zed Industries' GPUI framework through the gpui-pre and
+gpui-pre-platform crates (Zed snapshot f816e1f), unmodified, licensed under
+Apache-2.0. Copyright Zed Industries, Inc.
+Source: https://github.com/zed-industries/zed
+License: https://www.apache.org/licenses/LICENSE-2.0
+
+The stack was chosen after studying Monocode Native
+(https://github.com/hardbeat920/monocode, MIT). No Monocode code is included.

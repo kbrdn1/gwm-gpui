@@ -1,0 +1,19 @@
+/target
+**/*.rs.bk
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local agent/tool state. The rules and the /changelog command are versioned so
+# every worktree carries them.
+.claude/*
+!.claude/rules/
+!.claude/commands/
+.serena/
+
+# Codebase graph output (graphify): regenerated on demand, never reviewed
+graphify-out/
+
+# changelog-generator scratch
+git-log.txt
