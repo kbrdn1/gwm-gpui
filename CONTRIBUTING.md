@@ -1,0 +1,32 @@
+# Contributing to gwm-gpui
+
+## Development
+
+```bash
+cargo run -- /path/to/a/repo      # launch the app
+cargo test                        # tests
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all
+```
+
+If `rustc` resolves to something older than your rustup stable, for example through a nix profile, put `~/.cargo/bin` first on your `PATH`.
+
+Logic that doesn't need a window is tested under `#[cfg(test)]`, driven by a real sample of what gwm prints. A change of behaviour comes with a test that failed first.
+
+## Branches
+
+`dev` is the integration branch, `main` is what's released. Work on `<type>/#<issue>-<description>`, from `dev`, through a pull request back into `dev`. `gwm create` sets this up from `.gwm.toml`.
+
+## Commits
+
+[Gitmoji](https://gitmoji.dev) + [Conventional Commits](https://www.conventionalcommits.org), referencing the issue:
+
+```text
+✨ feat(worktrees): open a worktree in a new tab (#12)
+```
+
+Atomic commits: each one builds and does one thing. Merge pull requests with a merge commit, never a squash.
+
+## Changelog
+
+Every user-visible change adds a line under `## [Unreleased]` in `CHANGELOG.md`.

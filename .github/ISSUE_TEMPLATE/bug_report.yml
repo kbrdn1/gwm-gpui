@@ -1,0 +1,91 @@
+name: "🐛 Bug Report"
+description: "Report a bug or unexpected behaviour"
+title: "[Bug]: "
+labels: ["fix"]
+assignees: []
+
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the issue.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. `cargo run -- ~/some-repo`
+        2. click ...
+        3. observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: A screenshot helps for anything visual.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - ui (views, rendering, theme)
+        - gwm-contract (data from gwm)
+        - packaging / install
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: app_version
+    attributes:
+      label: gwm-gpui version or commit
+    validations:
+      required: true
+
+  - type: input
+    id: gwm_version
+    attributes:
+      label: gwm version
+      description: Output of `gwm --version`.
+      placeholder: "gwm 1.11.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "macOS 27.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+    validations:
+      required: false

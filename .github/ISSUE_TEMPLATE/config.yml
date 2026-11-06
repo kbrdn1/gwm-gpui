@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: gwm itself
+    url: https://github.com/kbrdn1/gwm-cli/issues
+    about: A worktree operation misbehaves on the command line too? It belongs to gwm-cli.
