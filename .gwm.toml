@@ -1,0 +1,19 @@
+# gwm — worktree bootstrap for gwm-gpui (Rust + GPUI)
+#
+# `base` mirrors MonoCode's "Create worktree", so both tools use the same folder.
+# Docs: https://github.com/kbrdn1/gwm-cli
+
+[worktree]
+base = "{repo_parent}/{repo}-worktrees"
+path_pattern = "{type}-{issue}-{desc}"
+branch_pattern = "{type}/#{issue}-{desc}"
+
+# Each worktree keeps its own `target/`: sharing one makes builds clobber each
+# other's graph. A first GPUI build is long, hence the fetch below.
+[[bootstrap.no_symlink]]
+path = "target"
+
+[[bootstrap.command]]
+name = "cargo fetch"
+run = "cargo fetch"
+when = "file_exists:Cargo.toml"
