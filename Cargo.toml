@@ -1,0 +1,26 @@
+[package]
+name = "gwm-gpui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "A native desktop app for gwm, the git worktree manager, built on GPUI."
+repository = "https://github.com/kbrdn1/gwm-gpui"
+publish = false
+
+[dependencies]
+# GPUI through the gpui-pre snapshots of Zed (Apache-2.0). Pinned exactly: a 0.x
+# snapshot can break between patch versions, and the two crates move together.
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+# `runtime_shaders` compiles the Metal shaders at launch, so a build needs the
+# Command Line Tools and not a full Xcode.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# GPUI crawls when its dependencies are unoptimised, and their debug info
+# dominates the link. Our own crate stays at opt-level 0 for fast rebuilds.
+[profile.dev]
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 1
