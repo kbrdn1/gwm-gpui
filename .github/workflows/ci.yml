@@ -41,7 +41,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: test

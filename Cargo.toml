@@ -24,6 +24,15 @@ gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
 # Command Line Tools and not a full Xcode.
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }
 
+# Off-screen rendering (`Window::render_to_image`) for examples/screenshot.rs.
+# Never in the app: it pulls GPUI's test support, and a second build of GPUI.
+[features]
+screenshot = ["gpui/test-support", "gpui_platform/test-support"]
+
+[[example]]
+name = "screenshot"
+required-features = ["screenshot"]
+
 # GPUI crawls when its dependencies are unoptimised, and their debug info
 # dominates the link. Our own crate stays at opt-level 0 for fast rebuilds.
 [profile.dev]

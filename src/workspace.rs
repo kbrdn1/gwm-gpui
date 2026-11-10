@@ -53,6 +53,14 @@ impl Workspace {
     }
   }
 
+  /// Shows `worktrees` as they are, without following gwm: the screenshot example.
+  pub fn showing(worktrees: Vec<Worktree>, source: Source) -> Self {
+    Self {
+      listing: Listing::Ready(worktrees),
+      source: Some(source),
+    }
+  }
+
   fn apply(&mut self, event: Event) {
     match event {
       Event::Snapshot(worktrees) => self.listing = Listing::Ready(worktrees),
