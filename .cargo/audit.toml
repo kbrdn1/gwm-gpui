@@ -1,0 +1,31 @@
+# cargo audit configuration (`cargo audit` reads `.cargo/audit.toml` from the
+# project root).
+#
+# Every advisory ignored below is `unmaintained`, none is a vulnerability, and
+# each crate comes in transitively through GPUI (`gpui-pre` 0.3.11): taking it
+# out of the graph would mean forking GPUI. Paths checked with
+# `cargo tree -i <crate> --target all -e normal,build`.
+#
+# Re-examine this list on every GPUI bump: drop an ID once that command no
+# longer finds the crate. CI keeps `--deny warnings`, so an advisory that is not
+# listed here, or a vulnerability in one of these crates, still fails the job.
+
+[advisories]
+ignore = [
+  # paste 1.0.15, a proc-macro: gpui-pre -> image -> exr -> pulp -> paste.
+  "RUSTSEC-2024-0436",
+  # rustybuzz 0.20.1, text shaping inside SVGs: gpui-pre -> usvg -> rustybuzz.
+  "RUSTSEC-2026-0206",
+  # ttf-parser 0.25.1: a direct dependency of gpui-pre, and also reached through
+  # usvg -> fontdb, usvg -> rustybuzz and gpui-pre-wgpu -> cosmic-text -> fontdb.
+  "RUSTSEC-2026-0192",
+  # zbus_names 4.3.5, Linux only: gpui-pre-linux -> oo7 / ashpd / notify-rust
+  # -> zbus -> zbus_names. Not in the macOS build, but cargo audit reads the
+  # whole Cargo.lock, every target included.
+  "RUSTSEC-2026-0371",
+  # zvariant 5.15.1, Linux only: the same zbus path, plus oo7 directly.
+  "RUSTSEC-2026-0370",
+  # zvariant_derive 5.15.1, a proc-macro, Linux only: zbus -> zvariant ->
+  # zvariant_derive.
+  "RUSTSEC-2026-0372",
+]
