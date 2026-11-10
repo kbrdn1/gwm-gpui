@@ -1,6 +1,8 @@
 //! The sidebar: the repo, then its worktrees in dense rows, grouped the way
 //! Monocode groups sessions (`shell/sidebar_list.rs`, `shell.rs` session rows).
 
+use std::path::Path;
+
 use gpui::{Context, FontWeight, Hsla, ScrollHandle, SharedString, div, prelude::*, px, svg};
 use gwm_client::Worktree;
 
@@ -41,7 +43,7 @@ pub(crate) fn sections(worktrees: &[Worktree], bucket: impl Fn(u64) -> Bucket) -
 /// then its rows, as `sidebar` lays them out.
 pub(crate) fn child_of(
   worktrees: &[Worktree],
-  selected: Option<&str>,
+  selected: Option<&Path>,
   bucket: impl Fn(u64) -> Bucket,
 ) -> Option<usize> {
   let selected = selected?;
@@ -49,7 +51,7 @@ pub(crate) fn child_of(
   for section in sections(worktrees, bucket) {
     child += 1;
     for index in section.rows {
-      if worktrees[index].id == selected {
+      if worktrees[index].path == selected {
         return Some(child);
       }
       child += 1;
@@ -86,7 +88,7 @@ pub(crate) fn sidebar(
     for index in section.rows {
       let worktree = &worktrees[index];
       let age = worktree.age_seconds.map(|age| ages.label(age));
-      let is_selected = selected.is_some_and(|selected| selected.id == worktree.id);
+      let is_selected = selected.is_some_and(|selected| selected.path == worktree.path);
       list = list.child(row(worktree, is_selected, age, cx));
     }
   }
@@ -149,11 +151,11 @@ fn section_title(title: &'static str) -> impl IntoElement {
 /// A worktree as Monocode's detailed session row: its name and age, then its
 /// branch and what gwm knows of its state.
 fn row(worktree: &Worktree, selected: bool, age: Option<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
-  let id = worktree.id.clone();
+  let path = worktree.path.clone();
   let status = &worktree.status;
   let branch = worktree.branch.clone().unwrap_or_else(|| "detached HEAD".to_owned());
   div()
-    .id(SharedString::from(format!("worktree-{}", worktree.id)))
+    .id(SharedString::from(format!("worktree-{}", worktree.path.display())))
     .h(px(52.))
     .mb(px(1.))
     .px(px(9.))
@@ -169,7 +171,7 @@ fn row(worktree: &Worktree, selected: bool, age: Option<String>, cx: &mut Contex
         row.hover(|row| row.bg(theme::hover()))
       }
     })
-    .on_click(cx.listener(move |workspace, _, _, cx| workspace.select(id.clone(), cx)))
+    .on_click(cx.listener(move |workspace, _, _, cx| workspace.select(path.clone(), cx)))
     .child(icon(
       assets::BRANCH,
       16.,
@@ -275,7 +277,7 @@ mod tests {
       .collect();
     assert_eq!(older, ["old", "older"]);
     // Main's title and row, Today's title and row, Yesterday's title: 5.
-    assert_eq!(child_of(&worktrees, Some("yesterday"), bucket), Some(5));
-    assert_eq!(child_of(&worktrees, Some("gone"), bucket), None);
+    assert_eq!(child_of(&worktrees, Some(Path::new("/yesterday")), bucket), Some(5));
+    assert_eq!(child_of(&worktrees, Some(Path::new("/gone")), bucket), None);
   }
 }

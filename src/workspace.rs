@@ -28,8 +28,10 @@ pub(crate) struct State {
   pub listing: Listing,
   /// Where the list comes from: shown, so a stale list never passes for live.
   pub source: Option<Source>,
-  /// The selected worktree's id, which a new snapshot keeps.
-  pub selected: Option<String>,
+  /// The selected worktree's path, which a new snapshot keeps. Not git's id:
+  /// gwm gives the main worktree its directory's name as id, which a linked
+  /// worktree can share.
+  pub selected: Option<PathBuf>,
   /// When the shown snapshot arrived: its ages count from there.
   pub received_at: i64,
 }
@@ -90,12 +92,12 @@ impl State {
       .unwrap_or(0)
       .saturating_add_signed(delta)
       .min(last);
-    self.selected = Some(worktrees[order[position]].id.clone());
+    self.selected = Some(worktrees[order[position]].path.clone());
   }
 
   fn position(&self, order: &[usize]) -> Option<usize> {
     let selected = self.selected.as_deref()?;
-    order.iter().position(|&index| self.worktrees()[index].id == selected)
+    order.iter().position(|&index| self.worktrees()[index].path == selected)
   }
 }
 
@@ -203,14 +205,14 @@ impl Workspace {
   /// while the sidebar is closed, and applies it once it is drawn again.
   fn reveal_selection(&self) {
     let ages = self.ages();
-    let selected = self.state.selected().map(|worktree| worktree.id.as_str());
+    let selected = self.state.selected().map(|worktree| worktree.path.as_path());
     if let Some(child) = sidebar::child_of(self.state.worktrees(), selected, |age| ages.bucket(age)) {
       self.sidebar_scroll.scroll_to_item(child);
     }
   }
 
-  pub(crate) fn select(&mut self, id: String, cx: &mut Context<Self>) {
-    self.state.selected = Some(id);
+  pub(crate) fn select(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    self.state.selected = Some(path);
     cx.notify();
   }
 
@@ -418,7 +420,7 @@ pub(crate) mod tests {
   #[test]
   fn a_new_snapshot_keeps_the_selection_or_falls_back_when_it_is_gone() {
     let mut state = state(None);
-    state.selected = Some("fix-57".to_owned());
+    state.selected = Some(PathBuf::from("/fix-57"));
     let mut worktrees = demo();
     worktrees.reverse();
     state.apply(Event::Snapshot(worktrees));
@@ -426,6 +428,17 @@ pub(crate) mod tests {
     state.apply(Event::Snapshot(vec![worktree("acme-api", true, None)]));
     assert_eq!(state.selected().unwrap().id, "acme-api");
     assert_eq!(state.selected().unwrap().path, Path::new("/acme-api"));
+  }
+
+  /// gwm names the main worktree's id after its directory, and a linked
+  /// worktree in a directory of the same name gets the same id.
+  #[test]
+  fn worktrees_sharing_an_id_stay_apart() {
+    let mut linked = worktree("acme-api", false, Some(60));
+    linked.path = PathBuf::from("/elsewhere/acme-api");
+    let mut state = State::new(Listing::Ready(vec![worktree("acme-api", true, None), linked]), None);
+    state.step(1);
+    assert_eq!(state.selected().unwrap().path, Path::new("/elsewhere/acme-api"));
   }
 
   #[test]
