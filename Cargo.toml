@@ -14,6 +14,8 @@ members = ["crates/gwm-client"]
 default-members = [".", "crates/gwm-client"]
 
 [dependencies]
+# Hands the events of `gwm_client::watch`, which blocks on its own thread, to the UI.
+async-channel = "2"
 gwm-client = { path = "crates/gwm-client" }
 # GPUI through the gpui-pre snapshots of Zed (Apache-2.0). Pinned exactly: a 0.x
 # snapshot can break between patch versions, and the two crates move together.
