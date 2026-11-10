@@ -62,16 +62,34 @@ impl Repo {
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Worktree {
+  /// The directory's name.
   pub name: String,
+  /// git's id for the worktree: unlike `name`, it survives a `git worktree move`,
+  /// so a selection keys on it.
+  pub id: String,
   pub path: PathBuf,
   /// `None` on a detached HEAD.
   pub branch: Option<String>,
+  /// The full HEAD oid, `None` when unresolvable.
+  pub head: Option<String>,
+  pub is_main: bool,
+  pub is_locked: bool,
+  pub is_prunable: bool,
   pub status: Status,
+  /// The branch's age against the trunk baseline. `None` on the trunk.
+  pub age_seconds: Option<u64>,
+  pub issue: Option<u64>,
+  pub pr: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Status {
   pub is_dirty: bool,
+  pub has_upstream: bool,
+  pub ahead: u32,
+  pub behind: u32,
+  /// The status could not be computed (detached HEAD, unborn branch).
+  pub unknown: bool,
 }
 
 /// Runs `gwm list --format=json` in `repo`. The error is a message for the user.
@@ -95,19 +113,31 @@ fn parse(json: &[u8]) -> Result<Vec<Worktree>, String> {
 mod tests {
   use super::*;
 
-  fn clean(name: &str, path: &str, branch: Option<&str>) -> Worktree {
+  /// The real entry of `parses_the_real_output_of_gwm`, as parsed.
+  fn fix_57() -> Worktree {
     Worktree {
-      name: name.to_owned(),
-      path: PathBuf::from(path),
-      branch: branch.map(str::to_owned),
-      status: Status { is_dirty: false },
+      name: "fix-57-rate-limit-headers".to_owned(),
+      id: "fix-57-rate-limit-headers".to_owned(),
+      path: PathBuf::from("/Users/kbrdn1/gwm-demo/worktrees/acme-api/fix-57-rate-limit-headers"),
+      branch: Some("fix/#57-rate-limit-headers".to_owned()),
+      head: Some("0aef1336019c0f5faae2a64ea6acf233a8b4ee76".to_owned()),
+      is_main: false,
+      is_locked: false,
+      is_prunable: false,
+      status: Status {
+        is_dirty: false,
+        has_upstream: false,
+        ahead: 0,
+        behind: 0,
+        unknown: false,
+      },
+      age_seconds: Some(1289704),
+      issue: Some(57),
+      pr: None,
     }
   }
 
-  /// A real `gwm list --format=json` entry from gwm 1.11.0, whole.
-  #[test]
-  fn parses_the_real_output_of_gwm() {
-    let json = br#"[{
+  const REAL: &str = r#"[{
       "name": "fix-57-rate-limit-headers",
       "id": "fix-57-rate-limit-headers",
       "path": "/Users/kbrdn1/gwm-demo/worktrees/acme-api/fix-57-rate-limit-headers",
@@ -121,28 +151,33 @@ mod tests {
       "issue": 57,
       "pr": null
     }]"#;
-    assert_eq!(
-      parse(json),
-      Ok(vec![clean(
-        "fix-57-rate-limit-headers",
-        "/Users/kbrdn1/gwm-demo/worktrees/acme-api/fix-57-rate-limit-headers",
-        Some("fix/#57-rate-limit-headers")
-      )])
-    );
+
+  /// A real `gwm list --format=json` entry from gwm 1.11.0, whole.
+  /// A real `gwm list --format=json` entry from gwm 1.11.0, whole.
+  #[test]
+  fn parses_the_real_output_of_gwm() {
+    assert_eq!(parse(REAL.as_bytes()), Ok(vec![fix_57()]));
   }
 
   #[test]
   fn a_detached_head_has_no_branch() {
-    let json = br#"[{ "name": "wt", "path": "/wt", "branch": null, "status": { "is_dirty": false } }]"#;
-    assert_eq!(parse(json), Ok(vec![clean("wt", "/wt", None)]));
+    let json = REAL.replace(r#""branch": "fix/#57-rate-limit-headers""#, r#""branch": null"#);
+    assert_eq!(parse(json.as_bytes()).unwrap()[0].branch, None);
   }
 
   /// The contract's promise to consumers: a field added later must not break us.
   #[test]
   fn ignores_fields_added_after_this_build() {
-    let json =
-      br#"[{ "name": "wt", "path": "/wt", "branch": "main", "status": { "is_dirty": false }, "from_the_future": 1 }]"#;
-    assert_eq!(parse(json), Ok(vec![clean("wt", "/wt", Some("main"))]));
+    let json = REAL.replace(r#""pr": null"#, r#""pr": null, "from_the_future": 1"#);
+    assert_eq!(parse(json.as_bytes()), Ok(vec![fix_57()]));
+  }
+
+  /// A field the contract requires is not optional here either: its absence is
+  /// a broken contract, shown, not a default.
+  #[test]
+  fn a_missing_required_field_is_an_error() {
+    let json = REAL.replace(r#""is_main": false,"#, "");
+    assert!(parse(json.as_bytes()).unwrap_err().contains("is_main"));
   }
 
   #[test]
