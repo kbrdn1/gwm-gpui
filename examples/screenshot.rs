@@ -2,27 +2,30 @@
 //! screen or a screen-recording permission:
 //!
 //! ```text
-//! cargo run --example screenshot --features screenshot -- <repo> <out.png>
+//! cargo run --example screenshot --features screenshot -- <repo> <out.png> [selected-row] [--no-sidebar]
 //! ```
 //!
 //! The worktrees are read once with `gwm list`. The window's blur comes from the
 //! window server, not from GPUI, so it is not in the image: translucent surfaces
 //! come out translucent, over nothing.
 
-use std::{error::Error, path::PathBuf};
+use std::{error::Error, path::PathBuf, sync::Arc};
 
 use gpui::{AppContext, Bounds, VisualTestAppContext, WindowBounds, point, px, size};
 use gwm_client::watch::Source;
-use gwm_gpui::Workspace;
+use gwm_gpui::{Workspace, assets::Assets};
 
 fn main() -> Result<(), Box<dyn Error>> {
-  let mut args = std::env::args_os().skip(1).map(PathBuf::from);
-  let (Some(repo), Some(out)) = (args.next(), args.next()) else {
-    return Err("usage: screenshot <repo> <out.png>".into());
+  let args: Vec<String> = std::env::args().skip(1).collect();
+  let [repo, out, rest @ ..] = args.as_slice() else {
+    return Err("usage: screenshot <repo> <out.png> [selected-row] [--no-sidebar]".into());
   };
+  let (repo, out) = (PathBuf::from(repo), PathBuf::from(out));
+  let down = rest.iter().find_map(|arg| arg.parse::<usize>().ok()).unwrap_or(0);
+  let sidebar = !rest.iter().any(|arg| arg == "--no-sidebar");
   let worktrees = gwm_client::list(&repo)?;
 
-  let mut cx = VisualTestAppContext::new(gpui_platform::current_platform(false));
+  let mut cx = VisualTestAppContext::with_asset_source(gpui_platform::current_platform(false), Arc::new(Assets));
   let window = {
     let mut app = cx.app.borrow_mut();
     let mut options = gwm_gpui::window_options(&app);
@@ -33,7 +36,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     }));
     options.focus = false;
     let source = Source::Once("rendered off screen by examples/screenshot.rs".to_owned());
-    app.open_window(options, |_, cx| cx.new(|_| Workspace::showing(worktrees, source)))?
+    app.open_window(options, |_, cx| {
+      cx.new(|cx| {
+        let mut workspace = Workspace::showing(worktrees, source, cx);
+        workspace.show(down, sidebar);
+        workspace
+      })
+    })?
   };
   cx.run_until_parked();
   cx.capture_screenshot(window.into())?.save(&out)?;

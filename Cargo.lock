@@ -2229,6 +2229,8 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "gwm-client",
+ "libc",
+ "serde_json",
 ]
 
 [[package]]
