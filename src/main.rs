@@ -59,8 +59,11 @@ impl WorktreesView {
       Event::Snapshot(worktrees) => self.listing = Listing::Ready(worktrees),
       Event::Source(source) => self.source = Some(source),
       Event::Failed(error) => {
-        // Nothing follows a failure: a "live" or "reconnecting" line would lie.
-        self.source = None;
+        // Nothing follows a failure: a live or reconnecting line would lie. Why
+        // the list was not live, though, still holds.
+        if !matches!(self.source, Some(Source::Once(_))) {
+          self.source = None;
+        }
         self.listing = Listing::Failed(error);
       }
     }
@@ -167,3 +170,31 @@ fn main() {
   });
 }
 
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn view(source: Source) -> WorktreesView {
+    WorktreesView {
+      listing: Listing::Loading,
+      source: Some(source),
+    }
+  }
+
+  #[test]
+  fn a_failure_takes_down_a_live_or_reconnecting_line() {
+    for source in [Source::Daemon("/d.sock".into()), Source::Lost("gone".into())] {
+      let mut view = view(source);
+      view.apply(Event::Failed("contract drift".to_owned()));
+      assert_eq!(view.source, None);
+      assert!(matches!(view.listing, Listing::Failed(_)));
+    }
+  }
+
+  #[test]
+  fn a_failure_keeps_why_the_list_is_not_live() {
+    let mut view = view(Source::Once("no daemon".into()));
+    view.apply(Event::Failed("gwm list failed".to_owned()));
+    assert_eq!(view.source, Some(Source::Once("no daemon".into())));
+  }
+}
