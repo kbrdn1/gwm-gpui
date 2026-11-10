@@ -5,7 +5,8 @@
 
 use std::{
   fs,
-  io::{BufRead, BufReader},
+  io::{BufRead, BufReader, Write},
+  os::unix::net::{UnixListener, UnixStream},
   path::{Path, PathBuf},
   process::{Child, Command, Stdio},
   sync::mpsc::{self, Receiver},
@@ -14,7 +15,7 @@ use std::{
 };
 
 use gwm_client::{
-  Worktree,
+  Repo, Worktree,
   watch::{Event, Sockets, Source, Spawned, watch},
 };
 use tempfile::TempDir;
@@ -70,10 +71,21 @@ impl Drop for UserDaemon {
   }
 }
 
+/// Stops a daemon the test's `watch` started, even when an assertion fails
+/// first: a test must not leave a `gwm daemon` behind.
+struct StopOnDrop(Spawned);
+
+impl Drop for StopOnDrop {
+  fn drop(&mut self) {
+    self.0.stop();
+  }
+}
+
 /// Runs [`watch`] on a thread and hands its events over a channel.
-fn start_watch(repo: &Path, sockets: Sockets, spawned: &Spawned) -> (Receiver<Event>, thread::JoinHandle<()>) {
+fn start_watch(path: &Path, sockets: Sockets, spawned: &Spawned) -> (Receiver<Event>, thread::JoinHandle<()>) {
+  let repo = Repo::locate(path).unwrap();
   let (events, received) = mpsc::channel();
-  let (repo, spawned) = (repo.to_owned(), spawned.clone());
+  let spawned = spawned.clone();
   let handle = thread::spawn(move || watch(&repo, &sockets, &spawned, |event| events.send(event).is_ok()));
   (received, handle)
 }
@@ -103,6 +115,7 @@ fn starts_its_own_daemon_follows_changes_and_stops_it() {
   let sockets = sockets(&dir, true);
   let own = sockets.own.clone().unwrap();
   let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
   let (events, handle) = start_watch(&acme, sockets, &spawned);
 
   assert_eq!(next(&events), Event::Source(Source::OwnDaemon(own.clone())));
@@ -111,27 +124,25 @@ fn starts_its_own_daemon_follows_changes_and_stops_it() {
   assert_eq!(snapshot(&events), ["acme", "feat-1"]);
 
   spawned.stop();
-  assert!(
-    std::os::unix::net::UnixStream::connect(&own).is_err(),
-    "the daemon is gone"
-  );
+  assert!(UnixStream::connect(&own).is_err(), "the daemon is gone");
   // The stream ends with the daemon, and `watch` returns once its events are
-  // no longer wanted. It may have started another daemon by then: stop it too.
+  // no longer wanted. It may have started another daemon by then: `_stop` ends it.
   assert!(matches!(next(&events), Event::Source(Source::Lost(_))));
   drop(events);
   handle.join().unwrap();
-  spawned.stop();
 }
 
 #[test]
-fn uses_a_daemon_already_serving_the_repo() {
+fn uses_a_daemon_already_serving_the_repo_from_any_folder_of_it() {
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
+  fs::create_dir(acme.join("src")).unwrap();
   let sockets = sockets(&dir, true);
   let user = UserDaemon::start(&acme, &sockets.default);
   let (default, own) = (sockets.default.clone(), sockets.own.clone().unwrap());
   let spawned = Spawned::default();
-  let (events, handle) = start_watch(&acme.join("."), sockets, &spawned);
+  let _stop = StopOnDrop(spawned.clone());
+  let (events, handle) = start_watch(&acme.join("src"), sockets, &spawned);
 
   assert_eq!(next(&events), Event::Source(Source::Daemon(default)));
   assert_eq!(snapshot(&events), ["acme"]);
@@ -141,7 +152,6 @@ fn uses_a_daemon_already_serving_the_repo() {
   assert!(matches!(next(&events), Event::Source(Source::Lost(_))));
   drop(events);
   handle.join().unwrap();
-  spawned.stop();
 }
 
 #[test]
@@ -152,6 +162,7 @@ fn skips_a_daemon_serving_another_repo() {
   let _user = UserDaemon::start(&other, &sockets.default);
   let own = sockets.own.clone().unwrap();
   let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
   let (events, handle) = start_watch(&acme, sockets, &spawned);
 
   assert_eq!(next(&events), Event::Source(Source::OwnDaemon(own)));
@@ -159,6 +170,68 @@ fn skips_a_daemon_serving_another_repo() {
   drop(events);
   spawned.stop();
   handle.join().unwrap();
+}
+
+/// A repo inside another's worktree, a submodule or a vendored repo, is not
+/// the outer repo, though its path starts with the outer one's.
+#[test]
+fn skips_the_daemon_of_the_repo_it_is_nested_in() {
+  let dir = tempfile::tempdir().unwrap();
+  let acme = repo(dir.path(), "acme");
+  fs::create_dir(acme.join("vendor")).unwrap();
+  let lib = repo(&acme.join("vendor"), "lib");
+  let sockets = sockets(&dir, true);
+  let _user = UserDaemon::start(&acme, &sockets.default);
+  let own = sockets.own.clone().unwrap();
+  let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
+  let (events, handle) = start_watch(&lib, sockets, &spawned);
+
+  assert_eq!(next(&events), Event::Source(Source::OwnDaemon(own)));
+  assert_eq!(snapshot(&events), ["lib"]);
+  drop(events);
+  spawned.stop();
+  handle.join().unwrap();
+}
+
+/// What a daemon on a shared socket sends before its first snapshot says
+/// nothing about this repo: a contract it cannot read sends `watch` on to the
+/// next socket, it does not stop it.
+#[test]
+fn moves_past_a_daemon_it_cannot_read_on_the_shared_socket() {
+  let dir = tempfile::tempdir().unwrap();
+  let acme = repo(dir.path(), "acme");
+  let sockets = sockets(&dir, true);
+  let listener = UnixListener::bind(&sockets.default).unwrap();
+  thread::spawn(move || {
+    let (connection, _) = listener.accept().unwrap();
+    let mut request = String::new();
+    BufReader::new(&connection).read_line(&mut request).unwrap();
+    let line = r#"{"jsonrpc":"2.0","method":"worktrees.changed","params":{"schema_version":2,"worktrees":{}}}"#;
+    let _ = writeln!(&connection, "{line}");
+  });
+  let own = sockets.own.clone().unwrap();
+  let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
+  let (events, handle) = start_watch(&acme, sockets, &spawned);
+
+  assert_eq!(next(&events), Event::Source(Source::OwnDaemon(own)));
+  assert_eq!(snapshot(&events), ["acme"]);
+  drop(events);
+  spawned.stop();
+  handle.join().unwrap();
+}
+
+#[test]
+fn one_own_socket_per_repo_whichever_worktree_it_is_opened_from() {
+  let dir = tempfile::tempdir().unwrap();
+  let acme = repo(dir.path(), "acme");
+  git(&acme, &["worktree", "add", "-q", "../feat-1", "-b", "feat/#1-x"]);
+  let other = repo(dir.path(), "other");
+  let own = |path: &Path| Sockets::for_repo(&Repo::locate(path).unwrap()).own;
+  assert!(own(&acme).is_some(), "$TMPDIR is owner-only on macOS");
+  assert_eq!(own(&acme), own(&dir.path().join("feat-1")));
+  assert_ne!(own(&acme), own(&other));
 }
 
 #[test]

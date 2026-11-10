@@ -18,7 +18,7 @@ use std::{
   time::Duration,
 };
 
-use crate::{Worktree, daemon};
+use crate::{Repo, Worktree, daemon};
 
 /// How long a daemon the app starts may take to print that it listens.
 const STARTUP: Duration = Duration::from_secs(10);
@@ -60,16 +60,21 @@ pub struct Sockets {
 }
 
 impl Sockets {
-  pub fn for_repo(repo: &Path) -> Self {
-    let repo = repo.canonicalize().unwrap_or_else(|_| repo.to_owned());
+  /// One own socket per repo, named after its common git directory, so every
+  /// worktree the app is opened from finds the same daemon.
+  pub fn for_repo(repo: &Repo) -> Self {
     let base = daemon::base_dir(
       std::env::var_os("XDG_RUNTIME_DIR").as_deref(),
       std::env::var_os("TMPDIR").as_deref(),
     );
     // A short hash, not the repo path: macOS caps a socket path at 104 bytes,
     // and `$TMPDIR` already takes about half.
-    let own = daemon::is_private(&base)
-      .then(|| base.join(format!("gwm-gpui-{:016x}.sock", fnv1a(repo.as_os_str().as_bytes()))));
+    let own = daemon::is_private(&base).then(|| {
+      base.join(format!(
+        "gwm-gpui-{:016x}.sock",
+        fnv1a(repo.common_dir.as_os_str().as_bytes())
+      ))
+    });
     Self {
       default: daemon::default_socket(),
       own,
@@ -106,16 +111,9 @@ impl Spawned {
 
 /// Feeds `on_event` until it returns `false`, or until there is nothing more
 /// to say: a fallback list, or a failure. Blocks: run it on a thread of its own.
-pub fn watch(repo: &Path, sockets: &Sockets, spawned: &Spawned, mut on_event: impl FnMut(Event) -> bool) {
-  let repo = match repo.canonicalize() {
-    Ok(repo) => repo,
-    Err(error) => {
-      on_event(Event::Failed(format!("{}: {error}", repo.display())));
-      return;
-    }
-  };
+pub fn watch(repo: &Repo, sockets: &Sockets, spawned: &Spawned, mut on_event: impl FnMut(Event) -> bool) {
   loop {
-    let reason = match follow(&repo, sockets, spawned, &mut on_event) {
+    let reason = match follow(repo, sockets, spawned, &mut on_event) {
       Outcome::Stopped => return,
       Outcome::Contract(message) => {
         on_event(Event::Failed(message));
@@ -123,7 +121,7 @@ pub fn watch(repo: &Path, sockets: &Sockets, spawned: &Spawned, mut on_event: im
       }
       Outcome::NoDaemon(reason) => {
         if on_event(Event::Source(Source::Once(reason))) {
-          on_event(match crate::list(&repo) {
+          on_event(match crate::list(&repo.toplevel) {
             Ok(worktrees) => Event::Snapshot(worktrees),
             Err(error) => Event::Failed(error),
           });
@@ -155,7 +153,7 @@ enum Session {
   Over(Outcome),
 }
 
-fn follow(repo: &Path, sockets: &Sockets, spawned: &Spawned, on_event: &mut impl FnMut(Event) -> bool) -> Outcome {
+fn follow(repo: &Repo, sockets: &Sockets, spawned: &Spawned, on_event: &mut impl FnMut(Event) -> bool) -> Outcome {
   let mut missed = String::new();
   for socket in [Some(&sockets.default), sockets.own.as_ref()].into_iter().flatten() {
     match session(repo, socket, Source::Daemon(socket.clone()), on_event) {
@@ -168,7 +166,7 @@ fn follow(repo: &Path, sockets: &Sockets, spawned: &Spawned, on_event: &mut impl
   };
   // A daemon of ours that died: reap it before starting the next.
   spawned.stop();
-  if let Err(why) = spawn(repo, own, spawned) {
+  if let Err(why) = spawn(&repo.toplevel, own, spawned) {
     return Outcome::NoDaemon(why);
   }
   match session(repo, own, Source::OwnDaemon(own.clone()), on_event) {
@@ -180,12 +178,16 @@ fn follow(repo: &Path, sockets: &Sockets, spawned: &Spawned, on_event: &mut impl
   }
 }
 
-fn session(repo: &Path, socket: &Path, source: Source, on_event: &mut impl FnMut(Event) -> bool) -> Session {
+fn session(repo: &Repo, socket: &Path, source: Source, on_event: &mut impl FnMut(Event) -> bool) -> Session {
+  // A daemon the app just started serves this repo by construction. One found
+  // on a socket may serve another, so what it sends before its first snapshot
+  // says nothing about this repo: the next socket gets its chance.
+  let started_here = matches!(source, Source::OwnDaemon(_));
   let mut snapshots = 0;
   let mut verdict = None;
   let result = daemon::subscribe(socket, |worktrees| {
     if snapshots == 0 {
-      if !serves(&worktrees, repo) {
+      if !serves(&worktrees, &repo.toplevel) {
         verdict = Some(Session::Missed(format!(
           "the daemon on {} serves another repo",
           socket.display()
@@ -209,20 +211,22 @@ fn session(repo: &Path, socket: &Path, source: Source, on_event: &mut impl FnMut
   }
   match result {
     Ok(()) => Session::Over(Outcome::Stopped),
+    Err(daemon::Error::Contract(message)) if snapshots == 0 && !started_here => Session::Missed(message),
     Err(daemon::Error::Contract(message)) => Session::Over(Outcome::Contract(message)),
     Err(daemon::Error::Unreachable(why)) if snapshots == 0 => Session::Missed(why),
     Err(daemon::Error::Unreachable(why)) => Session::Over(Outcome::Lost(why)),
   }
 }
 
-/// Whether a snapshot is this repo's: `repo` is one of its worktrees, or inside
-/// one. gwm's daemon has no method that names its repo, so this is how a shared
-/// socket is told apart.
-fn serves(worktrees: &[Worktree], repo: &Path) -> bool {
-  worktrees.iter().any(|worktree| {
-    let path = worktree.path.canonicalize().unwrap_or_else(|_| worktree.path.clone());
-    repo.starts_with(path)
-  })
+/// Whether a snapshot is this repo's: `toplevel`, the root of the worktree the
+/// app was opened in, is exactly one of its worktrees. Not a prefix: a repo
+/// nested in another (a submodule, a vendored repo) lies inside the outer one's
+/// worktree. gwm's daemon has no method that names its repo, so this is how a
+/// shared socket is told apart.
+fn serves(worktrees: &[Worktree], toplevel: &Path) -> bool {
+  worktrees
+    .iter()
+    .any(|worktree| worktree.path.canonicalize().is_ok_and(|path| path == toplevel))
 }
 
 /// Starts `gwm daemon` on `socket` and waits until it listens.
@@ -290,13 +294,24 @@ mod tests {
   }
 
   #[test]
-  fn a_snapshot_serves_its_worktrees_and_what_is_inside_them() {
-    let snapshot = [at("/repos/acme/"), at("/repos/acme-worktrees/feat-1")];
-    assert!(serves(&snapshot, Path::new("/repos/acme")));
-    assert!(serves(&snapshot, Path::new("/repos/acme/src")));
-    assert!(serves(&snapshot, Path::new("/repos/acme-worktrees/feat-1")));
-    assert!(!serves(&snapshot, Path::new("/repos/acme-api")));
-    assert!(!serves(&snapshot, Path::new("/repos")));
+  fn a_snapshot_serves_exactly_its_worktrees() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for path in ["acme/vendor/lib", "acme-worktrees/feat-1", "acme-api"] {
+      std::fs::create_dir_all(root.join(path)).unwrap();
+    }
+    let acme = root.join("acme");
+    // gwm prints the main worktree with a trailing slash.
+    let snapshot = [
+      at(&format!("{}/", acme.display())),
+      at(&root.join("acme-worktrees/feat-1").to_string_lossy()),
+    ];
+    assert!(serves(&snapshot, &acme));
+    assert!(serves(&snapshot, &root.join("acme-worktrees/feat-1")));
+    // A repo nested in acme's worktree is another repo.
+    assert!(!serves(&snapshot, &root.join("acme/vendor/lib")));
+    assert!(!serves(&snapshot, &root.join("acme-api")));
+    assert!(!serves(&snapshot, &root));
   }
 
   #[test]

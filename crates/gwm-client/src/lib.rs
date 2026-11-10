@@ -10,11 +10,55 @@ pub mod daemon;
 pub mod watch;
 
 use std::{
+  ffi::OsStr,
+  os::unix::ffi::OsStrExt,
   path::{Path, PathBuf},
   process::Command,
 };
 
 use serde::Deserialize;
+
+/// The repo a window shows, as git names it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Repo {
+  /// The root of the worktree the app was opened in: a daemon serves this
+  /// repo only if this exact path is one of its worktrees.
+  pub toplevel: PathBuf,
+  /// The git directory every worktree of the repo shares, so it names the
+  /// repo whichever worktree the app was opened from.
+  pub common_dir: PathBuf,
+}
+
+impl Repo {
+  /// Asks git, once, where `path` belongs. Both paths come back canonical.
+  pub fn locate(path: &Path) -> Result<Self, String> {
+    let output = Command::new("git")
+      .args([
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+        "--git-common-dir",
+      ])
+      .current_dir(path)
+      .output()
+      .map_err(|error| format!("could not run git in {}: {error}", path.display()))?;
+    if !output.status.success() {
+      return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let mut lines = output.stdout.split(|&byte| byte == b'\n');
+    let mut next = || {
+      let line = lines.next().filter(|line| !line.is_empty());
+      let path = PathBuf::from(OsStr::from_bytes(line.ok_or("unexpected git rev-parse output")?));
+      path
+        .canonicalize()
+        .map_err(|error| format!("{}: {error}", path.display()))
+    };
+    Ok(Self {
+      toplevel: next()?,
+      common_dir: next()?,
+    })
+  }
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Worktree {

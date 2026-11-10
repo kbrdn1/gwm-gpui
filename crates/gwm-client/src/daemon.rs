@@ -66,9 +66,12 @@ fn socket_in(base: &Path, base_is_private: bool, uid: u32) -> PathBuf {
   }
 }
 
-/// A directory this user owns and nobody else can enter.
+/// A directory this user owns and nobody else can enter. Like gwm, a symlink
+/// is judged as a symlink, not by its target, or both would disagree on the
+/// socket path.
 pub fn is_private(dir: &Path) -> bool {
-  std::fs::metadata(dir).is_ok_and(|meta| meta.is_dir() && meta.uid() == current_uid() && meta.mode() & 0o077 == 0)
+  std::fs::symlink_metadata(dir)
+    .is_ok_and(|meta| meta.file_type().is_dir() && meta.uid() == current_uid() && meta.mode() & 0o077 == 0)
 }
 
 fn current_uid() -> u32 {
@@ -110,7 +113,9 @@ fn subscribe_with(
   let mut delivered = false;
   loop {
     line.clear();
-    if reader.read_line(&mut line).map_err(unreachable)? == 0 {
+    // No newline means the stream ended mid-line: a daemon killed while
+    // writing. That is the end of the stream, not unreadable output.
+    if reader.read_line(&mut line).map_err(unreachable)? == 0 || !line.ends_with('\n') {
       break;
     }
     if line.trim().is_empty() {
@@ -177,6 +182,10 @@ mod tests {
 
   /// A real notification from `gwm daemon` 1.11.0 on a throwaway repo, whole.
   const REAL: &str = r#"{"jsonrpc":"2.0","method":"worktrees.changed","params":{"schema_version":1,"worktrees":[{"age_seconds":null,"branch":"main","head":"a57e9d733da2fdcc699de4ae28e8559bc36cda02","id":"acme","is_locked":false,"is_main":true,"is_prunable":false,"issue":null,"name":"acme","path":"/private/tmp/gwm-fixture/acme/","pr":null,"status":{"ahead":0,"behind":0,"has_upstream":false,"is_dirty":false,"unknown":false}},{"age_seconds":null,"branch":"feat/#12-search","head":"a57e9d733da2fdcc699de4ae28e8559bc36cda02","id":"feat-12-search","is_locked":false,"is_main":false,"is_prunable":false,"issue":12,"name":"feat-12-search","path":"/private/tmp/gwm-fixture/acme-worktrees/feat-12-search","pr":null,"status":{"ahead":0,"behind":0,"has_upstream":false,"is_dirty":true,"unknown":false}}]}}"#;
+
+  fn line(text: &str) -> String {
+    format!("{text}\n")
+  }
 
   fn names(worktrees: &[Worktree]) -> Vec<&str> {
     worktrees.iter().map(|worktree| worktree.name.as_str()).collect()
@@ -251,8 +260,8 @@ mod tests {
     assert!(!is_private(dir.path()));
   }
 
-  /// A fake daemon: answers one `subscribe` with `lines`, then hangs up, or
-  /// stays silent for a while when `lines` is empty and `silent` is set.
+  /// A fake daemon: answers one `subscribe` with `lines`, each written as
+  /// given, then hangs up, or first stays silent for a while if `silent`.
   fn fake_daemon(lines: Vec<String>, silent: bool) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("d.sock");
@@ -263,7 +272,7 @@ mod tests {
       BufReader::new(&connection).read_line(&mut request).unwrap();
       // The client may hang up first, on purpose: a failed write is not an error here.
       for line in lines {
-        let _ = writeln!(&connection, "{line}");
+        let _ = write!(&connection, "{line}");
       }
       if silent {
         thread::sleep(Duration::from_secs(2));
@@ -274,7 +283,7 @@ mod tests {
 
   #[test]
   fn follows_snapshots_until_the_stream_ends() {
-    let (_dir, socket) = fake_daemon(vec![REAL.to_owned(), REAL.to_owned()], false);
+    let (_dir, socket) = fake_daemon(vec![line(REAL), line(REAL)], false);
     let mut seen = 0;
     let result = subscribe(&socket, |_| {
       seen += 1;
@@ -286,7 +295,7 @@ mod tests {
 
   #[test]
   fn stops_when_the_caller_says_so() {
-    let (_dir, socket) = fake_daemon(vec![REAL.to_owned(), REAL.to_owned()], true);
+    let (_dir, socket) = fake_daemon(vec![line(REAL), line(REAL)], true);
     let mut seen = 0;
     assert_eq!(
       subscribe(&socket, |_| {
@@ -315,7 +324,7 @@ mod tests {
   #[test]
   fn a_version_change_mid_stream_stops_the_stream() {
     let drifted = REAL.replace(r#""schema_version":1"#, r#""schema_version":2"#);
-    let (_dir, socket) = fake_daemon(vec![REAL.to_owned(), drifted], true);
+    let (_dir, socket) = fake_daemon(vec![line(REAL), line(&drifted)], true);
     let mut seen = 0;
     let result = subscribe(&socket, |_| {
       seen += 1;
@@ -323,6 +332,31 @@ mod tests {
     });
     assert_eq!(seen, 1);
     assert!(matches!(result, Err(Error::Contract(_))));
+  }
+
+  #[test]
+  fn a_line_cut_by_the_end_of_the_stream_is_the_end_not_bad_output() {
+    let (_dir, socket) = fake_daemon(vec![line(REAL), REAL[..80].to_owned()], false);
+    let mut seen = 0;
+    let result = subscribe(&socket, |_| {
+      seen += 1;
+      true
+    });
+    assert_eq!(seen, 1);
+    assert!(matches!(result, Err(Error::Unreachable(message)) if message.ends_with("closed the stream")));
+  }
+
+  #[test]
+  fn a_symlink_to_a_private_directory_is_not_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert!(is_private(&target));
+    assert!(!is_private(&link));
   }
 
   #[test]

@@ -8,7 +8,7 @@ use gpui::{
 };
 
 use gwm_client::{
-  Worktree,
+  Repo, Worktree,
   watch::{self, Event, Sockets, Source, Spawned},
 };
 
@@ -31,9 +31,13 @@ impl WorktreesView {
     let (events, received) = async_channel::unbounded();
     // `watch` blocks on the daemon's socket for as long as the app runs. On the
     // background executor it would hold a worker for good: it gets its own thread.
-    std::thread::spawn(move || {
-      let sockets = Sockets::for_repo(&repo);
-      watch::watch(&repo, &sockets, &spawned, |event| events.send_blocking(event).is_ok());
+    std::thread::spawn(move || match Repo::locate(&repo) {
+      Ok(repo) => watch::watch(&repo, &Sockets::for_repo(&repo), &spawned, |event| {
+        events.send_blocking(event).is_ok()
+      }),
+      Err(error) => {
+        let _ = events.send_blocking(Event::Failed(error));
+      }
     });
     cx.spawn(async move |this, cx| {
       while let Ok(event) = received.recv().await {
