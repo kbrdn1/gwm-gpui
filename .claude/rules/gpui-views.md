@@ -11,6 +11,6 @@ paths:
 - Pas de bouton sans fonction : un chevron de menu, une recherche ou des flèches de navigation qui ne font rien sont des données inventées.
 - Un fichier par vue, découpé tôt. Monocode Native a laissé `shell.rs` monter à 13 437 lignes sur 197 507 : c'est le piège à éviter ici.
 - `gpui` et `gpui_platform` bougent ensemble, épinglés en `=`. Un bump est une PR à part, testée en lançant l'app.
-- Ne jamais activer la feature `screen-capture` : elle tire `zed-scap`, que Monocode refuse dans son graphe de dépendances parce que sa licence publiée ajoute des restrictions à ce que ses métadonnées annoncent (MIT).
+- Ne jamais activer la feature `screen-capture` : elle tire `zed-scap`, que Monocode refuse dans son graphe de dépendances parce que sa licence publiée ajoute des restrictions à ce que ses métadonnées annoncent (MIT). Depuis la feature `screenshot`, `zed-scap` figure dans `Cargo.lock` (la feature faible `x11 = ["scap?/x11"]` de `test-support` suffit à l'y inscrire) mais n'est compilé pour aucune cible : `cargo tree -i zed-scap --target all --all-features` doit rester vide.
 - Lancer l'app avant de déclarer un changement d'UI terminé : les tests ne voient pas un rendu cassé. Et regarder le rendu : `examples/screenshot.rs` produit un PNG hors écran (voir `CLAUDE.md`).
 - Un élément `absolute()` sans `top`/`left` garde sa position statique, après ses frères : ancrer avec `top_0().left_0()`.

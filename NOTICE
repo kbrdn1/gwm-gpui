@@ -5,8 +5,8 @@ Source: https://github.com/zed-industries/zed
 License: https://www.apache.org/licenses/LICENSE-2.0
 
 The look follows Monocode Native (https://github.com/hardbeat920/monocode),
-Copyright (c) 2026 Nick, licensed under MIT
-(https://github.com/hardbeat920/monocode/blob/main/LICENSE):
+Copyright (c) 2026 Nick, licensed under MIT (full text in
+assets/icons/LICENSE-MONOCODE):
 - src/theme.rs takes its dark theme's surfaces, opacities, radii and sizes
   (crates/monocode-gpui/src/theme.rs, shell/layout.rs);
 - src/age.rs reimplements its relative time format and day buckets
@@ -15,5 +15,6 @@ Copyright (c) 2026 Nick, licensed under MIT
 
 The icons in assets/icons/ are Monocode's copies of Hugeicons Stroke Rounded
 (@hugeicons/core-free-icons 4.3.0), Copyright (c) Hugeicons, licensed under
-MIT: assets/icons/LICENSE-HUGEICONS.
+MIT: assets/icons/LICENSE-HUGEICONS. Monocode's copies are themselves under its
+MIT license: assets/icons/LICENSE-MONOCODE.
 Source: https://github.com/hugeicons/hugeicons
