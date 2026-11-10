@@ -2,7 +2,7 @@
 //! views sit in. The frame is Monocode's rounded card: a washed chrome (title
 //! bar, sidebar, gutter, status bar) around an unwashed, rounded central card.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use gpui::{
   App, Context, FocusHandle, Focusable, PathBuilder, Pixels, ScrollHandle, SharedString, Window, actions, canvas, div,
@@ -30,6 +30,8 @@ pub(crate) struct State {
   pub source: Option<Source>,
   /// The selected worktree's id, which a new snapshot keeps.
   pub selected: Option<String>,
+  /// When the shown snapshot arrived: its ages count from there.
+  pub received_at: i64,
 }
 
 impl State {
@@ -38,12 +40,16 @@ impl State {
       listing,
       source,
       selected: None,
+      received_at: age::now(),
     }
   }
 
   fn apply(&mut self, event: Event) {
     match event {
-      Event::Snapshot(worktrees) => self.listing = Listing::Ready(worktrees),
+      Event::Snapshot(worktrees) => {
+        self.listing = Listing::Ready(worktrees);
+        self.received_at = age::now();
+      }
       Event::Source(source) => self.source = Some(source),
       Event::Failed(error) => {
         // Nothing follows a failure: a live or reconnecting line would lie. Why
@@ -123,8 +129,6 @@ pub struct Workspace {
   pub(crate) state: State,
   pub(crate) sidebar_open: bool,
   sidebar_scroll: ScrollHandle,
-  /// Set by a keyboard move, so the next frame scrolls the selection into view.
-  reveal_selection: bool,
   focus: FocusHandle,
 }
 
@@ -161,11 +165,21 @@ impl Workspace {
   }
 
   fn with_state(state: State, cx: &mut Context<Self>) -> Self {
+    // Ages are worded to the minute ("25m"): repaint once a minute, or they
+    // would only move with the next snapshot.
+    cx.spawn(async move |this, cx| {
+      loop {
+        cx.background_executor().timer(Duration::from_secs(60)).await;
+        if this.update(cx, |_, cx| cx.notify()).is_err() {
+          break;
+        }
+      }
+    })
+    .detach();
     Self {
       state,
       sidebar_open: true,
       sidebar_scroll: ScrollHandle::new(),
-      reveal_selection: false,
       focus: cx.focus_handle(),
     }
   }
@@ -174,8 +188,25 @@ impl Workspace {
   /// sidebar, as a user would: for the screenshot example.
   pub fn show(&mut self, down: usize, sidebar_open: bool) {
     self.state.step(down.cast_signed());
-    self.reveal_selection = true;
+    self.reveal_selection();
     self.sidebar_open = sidebar_open;
+  }
+
+  fn ages(&self) -> age::Ages {
+    age::Ages {
+      received_at: self.state.received_at,
+      now: age::now(),
+    }
+  }
+
+  /// Scrolls the sidebar to the selected row. The handle keeps the request
+  /// while the sidebar is closed, and applies it once it is drawn again.
+  fn reveal_selection(&self) {
+    let ages = self.ages();
+    let selected = self.state.selected().map(|worktree| worktree.id.as_str());
+    if let Some(child) = sidebar::child_of(self.state.worktrees(), selected, |age| ages.bucket(age)) {
+      self.sidebar_scroll.scroll_to_item(child);
+    }
   }
 
   pub(crate) fn select(&mut self, id: String, cx: &mut Context<Self>) {
@@ -190,7 +221,7 @@ impl Workspace {
 
   fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
     self.state.step(delta);
-    self.reveal_selection = true;
+    self.reveal_selection();
     cx.notify();
   }
 }
@@ -203,14 +234,13 @@ impl Focusable for Workspace {
 
 impl Render for Workspace {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let reveal_selection = std::mem::take(&mut self.reveal_selection);
-    let now = age::now();
+    let ages = self.ages();
     let selected = self.state.selected();
     let card = match &self.state.listing {
       Listing::Loading => message("Loading worktrees…", theme::ink(0.5)).into_any_element(),
       Listing::Failed(error) => message(error, theme::color(theme::ERROR)).into_any_element(),
       Listing::Ready(_) => match selected {
-        Some(worktree) => detail::detail(worktree, now).into_any_element(),
+        Some(worktree) => detail::detail(worktree, ages).into_any_element(),
         None => message("No worktrees", theme::ink(0.5)).into_any_element(),
       },
     };
@@ -238,9 +268,8 @@ impl Render for Workspace {
             body.child(sidebar::sidebar(
               self.state.worktrees(),
               selected,
-              now,
+              ages,
               &self.sidebar_scroll,
-              reveal_selection,
               cx,
             ))
           })

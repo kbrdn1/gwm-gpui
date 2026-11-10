@@ -39,6 +39,31 @@ pub fn local_day(unix: i64) -> Day {
   }
 }
 
+/// Ages as of now. gwm computes `age_seconds` when it scans, and its daemon
+/// sends no new snapshot when only ages change: an age is anchored to when its
+/// snapshot arrived, then counted on from there.
+#[derive(Clone, Copy, Debug)]
+pub struct Ages {
+  /// When the snapshot arrived, in seconds since the epoch.
+  pub received_at: i64,
+  pub now: i64,
+}
+
+impl Ages {
+  fn started(self, age_seconds: u64) -> i64 {
+    self.received_at - age_seconds.cast_signed()
+  }
+
+  pub fn label(self, age_seconds: u64) -> String {
+    let started = self.started(age_seconds);
+    label((self.now - started).max(0).cast_unsigned(), local_day(started))
+  }
+
+  pub fn bucket(self, age_seconds: u64) -> Bucket {
+    Bucket::of(local_day(self.started(age_seconds)), local_day(self.now))
+  }
+}
+
 /// "now", "25m", "1h 37m", "6d", then the day the branch started, "Oct 22":
 /// Monocode's format.
 pub fn label(age_seconds: u64, started: Day) -> String {
@@ -110,6 +135,17 @@ mod tests {
     for (seconds, expected) in cases {
       assert_eq!(label(seconds, OCT_22), expected, "{seconds} s");
     }
+  }
+
+  /// The daemon sends no snapshot when only ages change: an hour later, the
+  /// branch must still be an hour older.
+  #[test]
+  fn an_age_keeps_counting_after_its_snapshot() {
+    let ages = Ages {
+      received_at: 1_000_000,
+      now: 1_000_000 + 3600,
+    };
+    assert_eq!(ages.label(25 * 60), "1h 25m");
   }
 
   #[test]

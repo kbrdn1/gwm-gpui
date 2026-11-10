@@ -5,12 +5,12 @@
 use gpui::{FontWeight, Hsla, SharedString, div, prelude::*, px};
 use gwm_client::Worktree;
 
-use crate::{age, sidebar::one_line, theme, title_bar::tile};
+use crate::{age::Ages, sidebar::one_line, theme, title_bar::tile};
 
 /// How much of the HEAD oid to show, as `git log --oneline` would.
 const SHORT_OID: usize = 12;
 
-pub(crate) fn detail(worktree: &Worktree, now: i64) -> impl IntoElement {
+pub(crate) fn detail(worktree: &Worktree, ages: Ages) -> impl IntoElement {
   let status = &worktree.status;
   let working_tree = if status.unknown {
     ("unknown", theme::ink(0.5))
@@ -27,7 +27,7 @@ pub(crate) fn detail(worktree: &Worktree, now: i64) -> impl IntoElement {
   let branch_age = worktree.age_seconds.map_or_else(
     // Null on the trunk and on a branch that has not diverged yet: no claim.
     || "—".to_owned(),
-    |seconds| age::label(seconds, age::local_day(now - seconds.cast_signed())),
+    |seconds| ages.label(seconds),
   );
   let flags: Vec<&str> = [
     (worktree.is_main, "main worktree"),
@@ -78,7 +78,7 @@ pub(crate) fn detail(worktree: &Worktree, now: i64) -> impl IntoElement {
             worktree
               .head
               .as_deref()
-              .map_or("unresolved", |oid| &oid[..oid.len().min(SHORT_OID)])
+              .map_or("unresolved", |oid| oid.get(..SHORT_OID).unwrap_or(oid))
               .to_owned(),
           ),
         ))

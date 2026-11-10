@@ -5,7 +5,7 @@ use gpui::{Context, FontWeight, Hsla, ScrollHandle, SharedString, div, prelude::
 use gwm_client::Worktree;
 
 use crate::{
-  age::{self, Bucket},
+  age::{Ages, Bucket},
   assets, theme,
   workspace::{Place, Workspace, order, place},
 };
@@ -37,20 +37,38 @@ pub(crate) fn sections(worktrees: &[Worktree], bucket: impl Fn(u64) -> Bucket) -
   sections
 }
 
+/// The list's child index of the worktree `selected`: a title per section,
+/// then its rows, as `sidebar` lays them out.
+pub(crate) fn child_of(
+  worktrees: &[Worktree],
+  selected: Option<&str>,
+  bucket: impl Fn(u64) -> Bucket,
+) -> Option<usize> {
+  let selected = selected?;
+  let mut child = 0;
+  for section in sections(worktrees, bucket) {
+    child += 1;
+    for index in section.rows {
+      if worktrees[index].id == selected {
+        return Some(child);
+      }
+      child += 1;
+    }
+  }
+  None
+}
+
 pub(crate) fn sidebar(
   worktrees: &[Worktree],
   selected: Option<&Worktree>,
-  now: i64,
+  ages: Ages,
   scroll: &ScrollHandle,
-  reveal_selection: bool,
   cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
-  let today = age::local_day(now);
-  let started = |age: u64| age::local_day(now - age.cast_signed());
   let main = worktrees.iter().find(|worktree| worktree.is_main);
-  // Titles and rows are all direct children of the list, so a row's child
-  // index is what `scroll_to_item` takes. Loops, not nested `map`s: every row
-  // borrows `cx` for its click listener.
+  // Titles and rows are all direct children of the list, in `child_of`'s
+  // order, so a row's index is what `scroll_to_item` takes. Loops, not nested
+  // `map`s: every row borrows `cx` for its click listener.
   let mut list = div()
     .id("worktrees")
     .track_scroll(scroll)
@@ -59,27 +77,17 @@ pub(crate) fn sidebar(
     .overflow_y_scroll()
     .px(px(8.))
     .pb(px(12.));
-  let mut children = 0;
-  for (position, section) in sections(worktrees, |age| Bucket::of(started(age), today))
-    .into_iter()
-    .enumerate()
-  {
+  for (position, section) in sections(worktrees, |age| ages.bucket(age)).into_iter().enumerate() {
     list = list.child(
       div()
         .when(position > 0, |title| title.mt(px(12.)))
         .child(section_title(section.title)),
     );
-    children += 1;
     for index in section.rows {
       let worktree = &worktrees[index];
-      let age = worktree.age_seconds.map(|age| age::label(age, started(age)));
+      let age = worktree.age_seconds.map(|age| ages.label(age));
       let is_selected = selected.is_some_and(|selected| selected.id == worktree.id);
-      // A keyboard move can take the selection out of view: bring it back.
-      if is_selected && reveal_selection {
-        scroll.scroll_to_item(children);
-      }
       list = list.child(row(worktree, is_selected, age, cx));
-      children += 1;
     }
   }
   div()
@@ -266,5 +274,8 @@ mod tests {
       .map(|&index| worktrees[index].id.as_str())
       .collect();
     assert_eq!(older, ["old", "older"]);
+    // Main's title and row, Today's title and row, Yesterday's title: 5.
+    assert_eq!(child_of(&worktrees, Some("yesterday"), bucket), Some(5));
+    assert_eq!(child_of(&worktrees, Some("gone"), bucket), None);
   }
 }
