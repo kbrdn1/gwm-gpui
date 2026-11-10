@@ -61,7 +61,11 @@ impl WorktreesView {
     match event {
       Event::Snapshot(worktrees) => self.listing = Listing::Ready(worktrees),
       Event::Source(source) => self.source = Some(source),
-      Event::Failed(error) => self.listing = Listing::Failed(error),
+      Event::Failed(error) => {
+        // Nothing follows a failure: a "live" or "reconnecting" line would lie.
+        self.source = None;
+        self.listing = Listing::Failed(error);
+      }
     }
   }
 }
