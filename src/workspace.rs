@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 
 use gpui::{
-  App, Context, FocusHandle, Focusable, PathBuilder, Pixels, SharedString, Window, actions, canvas, div, point,
-  prelude::*, px,
+  App, Context, FocusHandle, Focusable, PathBuilder, Pixels, ScrollHandle, SharedString, Window, actions, canvas, div,
+  point, prelude::*, px,
 };
 use gwm_client::{
   Worktree,
@@ -93,21 +93,38 @@ impl State {
   }
 }
 
-/// The sidebar's order, as indexes into `worktrees`: the trunk first (the
-/// branches gwm gives no age, the main worktree leading), then the others,
-/// youngest first.
+/// Where a worktree goes in the sidebar, in order: the main worktree, then
+/// the branches gwm dates, then those it does not. `age_seconds` is null on the
+/// trunk, but also on a branch that has not diverged from it yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Place {
+  Main,
+  Dated(u64),
+  Undated,
+}
+
+pub(crate) fn place(worktree: &Worktree) -> Place {
+  match (worktree.is_main, worktree.age_seconds) {
+    (true, _) => Place::Main,
+    (false, Some(age)) => Place::Dated(age),
+    (false, None) => Place::Undated,
+  }
+}
+
+/// The sidebar's order, as indexes into `worktrees`: by [`Place`], the dated
+/// branches youngest first, and gwm's own order otherwise.
 pub(crate) fn order(worktrees: &[Worktree]) -> Vec<usize> {
-  let (mut trunk, mut branches): (Vec<usize>, Vec<usize>) =
-    (0..worktrees.len()).partition(|&index| worktrees[index].age_seconds.is_none());
-  trunk.sort_by_key(|&index| !worktrees[index].is_main);
-  branches.sort_by_key(|&index| worktrees[index].age_seconds);
-  trunk.extend(branches);
-  trunk
+  let mut order: Vec<usize> = (0..worktrees.len()).collect();
+  order.sort_by_key(|&index| place(&worktrees[index]));
+  order
 }
 
 pub struct Workspace {
   pub(crate) state: State,
   pub(crate) sidebar_open: bool,
+  sidebar_scroll: ScrollHandle,
+  /// Set by a keyboard move, so the next frame scrolls the selection into view.
+  reveal_selection: bool,
   focus: FocusHandle,
 }
 
@@ -147,6 +164,8 @@ impl Workspace {
     Self {
       state,
       sidebar_open: true,
+      sidebar_scroll: ScrollHandle::new(),
+      reveal_selection: false,
       focus: cx.focus_handle(),
     }
   }
@@ -155,6 +174,7 @@ impl Workspace {
   /// sidebar, as a user would: for the screenshot example.
   pub fn show(&mut self, down: usize, sidebar_open: bool) {
     self.state.step(down.cast_signed());
+    self.reveal_selection = true;
     self.sidebar_open = sidebar_open;
   }
 
@@ -170,6 +190,7 @@ impl Workspace {
 
   fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
     self.state.step(delta);
+    self.reveal_selection = true;
     cx.notify();
   }
 }
@@ -182,6 +203,7 @@ impl Focusable for Workspace {
 
 impl Render for Workspace {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let reveal_selection = std::mem::take(&mut self.reveal_selection);
     let now = age::now();
     let selected = self.state.selected();
     let card = match &self.state.listing {
@@ -213,7 +235,14 @@ impl Render for Workspace {
           .min_h_0()
           .flex()
           .when(self.sidebar_open, |body| {
-            body.child(sidebar::sidebar(self.state.worktrees(), selected, now, cx))
+            body.child(sidebar::sidebar(
+              self.state.worktrees(),
+              selected,
+              now,
+              &self.sidebar_scroll,
+              reveal_selection,
+              cx,
+            ))
           })
           // Closed, the sidebar leaves a gutter on the left as on the right.
           .when(!self.sidebar_open, |body| body.child(gutter()))
@@ -332,11 +361,11 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn the_trunk_comes_first_then_the_youngest_branches() {
+  fn main_comes_first_then_the_youngest_branches_then_the_undated() {
     let worktrees = demo();
     assert_eq!(
       ids(&worktrees, &order(&worktrees)),
-      ["acme-api", "dev", "docs-71", "fix-57", "feat-42"]
+      ["acme-api", "docs-71", "fix-57", "feat-42", "dev"]
     );
   }
 
@@ -352,9 +381,9 @@ pub(crate) mod tests {
     assert_eq!(state.selected().unwrap().id, "acme-api");
     state.step(1);
     state.step(1);
-    assert_eq!(state.selected().unwrap().id, "docs-71");
+    assert_eq!(state.selected().unwrap().id, "fix-57");
     state.step(10);
-    assert_eq!(state.selected().unwrap().id, "feat-42");
+    assert_eq!(state.selected().unwrap().id, "dev");
   }
 
   #[test]

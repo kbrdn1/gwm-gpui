@@ -25,7 +25,8 @@ pub(crate) fn detail(worktree: &Worktree, now: i64) -> impl IntoElement {
     "none".to_owned()
   };
   let branch_age = worktree.age_seconds.map_or_else(
-    || "trunk".to_owned(),
+    // Null on the trunk and on a branch that has not diverged yet: no claim.
+    || "—".to_owned(),
     |seconds| age::label(seconds, age::local_day(now - seconds.cast_signed())),
   );
   let flags: Vec<&str> = [

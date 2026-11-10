@@ -1,13 +1,13 @@
 //! The sidebar: the repo, then its worktrees in dense rows, grouped the way
 //! Monocode groups sessions (`shell/sidebar_list.rs`, `shell.rs` session rows).
 
-use gpui::{Context, FontWeight, Hsla, SharedString, div, prelude::*, px, svg};
+use gpui::{Context, FontWeight, Hsla, ScrollHandle, SharedString, div, prelude::*, px, svg};
 use gwm_client::Worktree;
 
 use crate::{
   age::{self, Bucket},
   assets, theme,
-  workspace::{Workspace, order},
+  workspace::{Place, Workspace, order, place},
 };
 
 pub(crate) struct Section {
@@ -16,12 +16,16 @@ pub(crate) struct Section {
   pub rows: Vec<usize>,
 }
 
-/// The sidebar's sections: "Trunk" for the branches gwm gives no age, then one
-/// per day bucket. `bucket` says which bucket an age falls in.
+/// The sidebar's sections: the main worktree, one per day bucket, then the
+/// branches gwm gives no age. `bucket` says which bucket an age falls in.
 pub(crate) fn sections(worktrees: &[Worktree], bucket: impl Fn(u64) -> Bucket) -> Vec<Section> {
   let mut sections: Vec<Section> = Vec::new();
   for index in order(worktrees) {
-    let title = worktrees[index].age_seconds.map_or("Trunk", |age| bucket(age).title());
+    let title = match place(&worktrees[index]) {
+      Place::Main => "Main",
+      Place::Dated(age) => bucket(age).title(),
+      Place::Undated => "Undated",
+    };
     match sections.last_mut() {
       Some(section) if section.title == title => section.rows.push(index),
       _ => sections.push(Section {
@@ -37,28 +41,46 @@ pub(crate) fn sidebar(
   worktrees: &[Worktree],
   selected: Option<&Worktree>,
   now: i64,
+  scroll: &ScrollHandle,
+  reveal_selection: bool,
   cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
   let today = age::local_day(now);
   let started = |age: u64| age::local_day(now - age.cast_signed());
   let main = worktrees.iter().find(|worktree| worktree.is_main);
-  // Loops, not nested `map`s: every row borrows `cx` for its click listener.
-  let mut list = div().id("worktrees").flex_1().min_h_0().overflow_y_scroll().pb(px(12.));
+  // Titles and rows are all direct children of the list, so a row's child
+  // index is what `scroll_to_item` takes. Loops, not nested `map`s: every row
+  // borrows `cx` for its click listener.
+  let mut list = div()
+    .id("worktrees")
+    .track_scroll(scroll)
+    .flex_1()
+    .min_h_0()
+    .overflow_y_scroll()
+    .px(px(8.))
+    .pb(px(12.));
+  let mut children = 0;
   for (position, section) in sections(worktrees, |age| Bucket::of(started(age), today))
     .into_iter()
     .enumerate()
   {
-    let mut block = div()
-      .px(px(8.))
-      .when(position > 0, |block| block.mt(px(12.)))
-      .child(section_title(section.title));
+    list = list.child(
+      div()
+        .when(position > 0, |title| title.mt(px(12.)))
+        .child(section_title(section.title)),
+    );
+    children += 1;
     for index in section.rows {
       let worktree = &worktrees[index];
       let age = worktree.age_seconds.map(|age| age::label(age, started(age)));
       let is_selected = selected.is_some_and(|selected| selected.id == worktree.id);
-      block = block.child(row(worktree, is_selected, age, cx));
+      // A keyboard move can take the selection out of view: bring it back.
+      if is_selected && reveal_selection {
+        scroll.scroll_to_item(children);
+      }
+      list = list.child(row(worktree, is_selected, age, cx));
+      children += 1;
     }
-    list = list.child(block);
   }
   div()
     .w(theme::SIDEBAR_WIDTH)
@@ -223,6 +245,7 @@ mod tests {
   fn sections_follow_the_sidebar_order_and_never_repeat() {
     let worktrees = [
       worktree("old", false, Some(40)),
+      worktree("not-diverged", false, None),
       worktree("main", true, None),
       worktree("today", false, Some(1)),
       worktree("older", false, Some(50)),
@@ -236,7 +259,7 @@ mod tests {
     };
     let sections = sections(&worktrees, bucket);
     let titles: Vec<_> = sections.iter().map(|section| section.title).collect();
-    assert_eq!(titles, ["Trunk", "Today", "Yesterday", "Older"]);
+    assert_eq!(titles, ["Main", "Today", "Yesterday", "Older", "Undated"]);
     let older: Vec<_> = sections[3]
       .rows
       .iter()
