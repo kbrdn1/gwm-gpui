@@ -1918,13 +1918,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99b18b06f5026b3d312488eacfdddbe78f82b4bf32bb2d2bc3186e31e552b797"
 
 [[package]]
+name = "gwm-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gwm-gpui"
 version = "0.1.0"
 dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
- "serde",
- "serde_json",
+ "gwm-client",
 ]
 
 [[package]]

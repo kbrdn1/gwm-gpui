@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/worktrees.rs"
+  - "crates/gwm-client/**"
 ---
 # Contrat avec gwm — conventions
 

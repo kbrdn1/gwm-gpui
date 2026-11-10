@@ -1,5 +1,4 @@
 mod theme;
-mod worktrees;
 
 use std::path::PathBuf;
 
@@ -8,7 +7,7 @@ use gpui::{
   WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
-use crate::worktrees::Worktree;
+use gwm_client::Worktree;
 
 actions!(gwm_gpui, [Quit]);
 
@@ -25,7 +24,7 @@ struct WorktreesView {
 impl WorktreesView {
   fn new(repo: PathBuf, cx: &mut Context<Self>) -> Self {
     cx.spawn(async move |this, cx| {
-      let result = cx.background_spawn(async move { worktrees::list(&repo) }).await;
+      let result = cx.background_spawn(async move { gwm_client::list(&repo) }).await;
       this
         .update(cx, |view, cx| {
           view.listing = match result {
