@@ -7,7 +7,7 @@ App desktop native pour [gwm](https://github.com/kbrdn1/gwm-cli), en Rust sur GP
 
 - Build : `cargo build`
 - Test  : `cargo test` (l'app et `gwm-client`) · `cargo test -p gwm-client` (la couche gwm seule, en quelques secondes, sans compiler GPUI). Les tests de `gwm-client` pilotent un vrai `gwm daemon` : `gwm` doit être sur le `PATH`, sinon ils échouent (exprès, ils ne se sautent pas).
-- Lint/Format : `cargo clippy --workspace --all-targets -- -D warnings` · `cargo fmt --all`
+- Lint/Format : `cargo clippy --workspace --all-targets --all-features -- -D warnings` (comme la CI : `--all-features` vérifie aussi l'example de capture) · `cargo fmt --all`
 - Audit : `cargo audit --deny warnings` (lit `.cargo/audit.toml`)
 - Run   : `cargo run -- <chemin-du-repo>` (par défaut le dossier courant). `gwm` doit être sur le `PATH`.
 
@@ -18,14 +18,14 @@ Voir l'UI sans écran : `cargo run --example screenshot --features screenshot --
 ## Structure
 - `src/main.rs` : bootstrap de l'application (assets, touches, fenêtre, arrêt du daemon au `on_app_quit`). Tout le reste est en lib (`src/lib.rs` : `window_options`, `bind_keys`), pour que l'example de capture ouvre la même fenêtre.
 - Vues, un fichier chacune : `src/workspace.rs` (vue racine : état, sélection, cadre « rounded card » et ses coins peints), `src/title_bar.rs`, `src/sidebar.rs`, `src/detail.rs`, `src/status_bar.rs`. Logique sans fenêtre testée : `State` et `order` (workspace), `sections` (sidebar), `src/age.rs` (format et groupes par jour, ceux de Monocode).
-- `src/assets.rs` + `assets/icons/` : 5 glyphes Hugeicons (MIT) repris de Monocode, embarqués (`include_bytes!`), crédités dans `NOTICE`.
+- `src/assets.rs` + `assets/icons/` : 3 glyphes Hugeicons (MIT) repris de Monocode, embarqués (`include_bytes!`), crédités dans `NOTICE`.
 - `examples/screenshot.rs` : rend la fenêtre hors écran en PNG (voir commandes).
 - `crates/gwm-client/` : tout ce qui parle à gwm, sans dépendance GPUI (workspace Cargo).
   - `src/lib.rs` : types du contrat, `gwm list --format=json`, et `Repo::locate` (un seul `git rev-parse --show-toplevel --git-common-dir`).
   - `src/daemon.rs` : le flux `subscribe` (contrôle de `schema_version`, handshake de 5 s) et le chemin du socket par défaut de gwm.
   - `src/watch.rs` : la stratégie : daemon du socket par défaut s'il sert ce repo (toplevel **égal** à un de ses worktrees, jamais un préfixe : un sous-module n'est pas son parent), puis socket propre à l'app, puis `gwm daemon` lancé par l'app, puis un seul `gwm list`. Une sortie illisible du daemon d'un socket partagé passe au suivant ; sur le socket propre de l'app, c'est une dérive de contrat, affichée. Si git ne localise pas le repo (bare), un seul `gwm list` : c'est gwm qui juge ce qu'il sait lister.
   - `tests/real_daemon.rs` : contre un vrai `gwm daemon` sur des repos jetables.
-- `src/theme.rs` : tokens : surfaces, opacités, rayons et tailles de Monocode Native (thème sombre, cadre rounded card) ; accent (`ACCENT`, un seul token) et couleurs d'état de gwm (`claude-dark`).
+- `src/theme.rs` : tokens : surfaces, opacités, rayons et tailles de Monocode Native (thème sombre, cadre rounded card), sauf l'opacité de la fenêtre, réglée sur ses captures (0.45 contre 0.85 par défaut chez lui, mesures dans le commentaire du token) ; accent (`ACCENT`, un seul token) et couleurs d'état de gwm (`claude-dark`).
 - `.claude/rules/` : conventions path-scoped (`gpui-views.md`, `gwm-contract.md`).
 
 ## Conventions de code
@@ -61,7 +61,7 @@ Voir l'UI sans écran : `cargo run --example screenshot --features screenshot --
   - les fondus de bord (liste de la sidebar, libellé d'onglet ; `metal_renderer.rs`) : ici, des ellipses ;
   - le masque de coins de la carte : remplacé par des chemins remplis de wash (`card_corners`), comme Monocode hors macOS ;
   - le repositionnement Auto Layout des feux (`traffic_lights.rs` chez Monocode) : ici `traffic_light_position` seul.
-  Pas de manque, vérifié : le mélange alpha non patché donne bien du source-over sur les fonds empilés (alpha mesuré 0.859 = 0.85 + 0.05 × 0.15), et le `Blurred` de `gpui-pre-macos` 0.3.11 utilise déjà le matériau `UnderWindowBackground` (`src/window.rs:3947`) que Monocode a dû patcher sur sa 0.3.9. Le flou lui-même vient du window server et ne se voit pas hors écran : à juger en lançant l'app.
+  Images et détail : `docs/gpui-gaps.md`. Pas de manque, vérifié : le mélange alpha non patché donne bien du source-over sur les fonds empilés (alpha mesuré 0.859 = 0.85 + 0.05 × 0.15), et le `Blurred` de `gpui-pre-macos` 0.3.11 utilise déjà le matériau `UnderWindowBackground` (`src/window.rs:3947`) que Monocode a dû patcher sur sa 0.3.9. Le flou lui-même vient du window server et ne se voit pas hors écran : à juger en lançant l'app.
 - Monocode est sous MIT : copier du code ou des assets impose son attribution dans `NOTICE`.
 - Le panneau des fichiers modifiés de Monocode n'a pas d'équivalent : `gwm status --json` donne `branch`, `issue` et `pr`, aucune liste de fichiers. À ajouter dans gwm-cli d'abord.
 - `.cargo/audit.toml` ignore 6 advisories `unmaintained` (aucune vulnérabilité), toutes transitives via GPUI : les sortir du graphe demanderait de forker GPUI. **À réexaminer à chaque bump de `gpui-pre`** : `cargo tree -i <crate> --target all -e normal,build` par ID, et retirer ceux qui ne sortent plus. Jamais d'ID ajouté sans sa raison et son chemin, et la CI garde `--deny warnings`.
