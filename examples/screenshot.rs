@@ -58,6 +58,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
   }
 
+  if options.live.is_some() && options.row > 0 {
+    return Err("--row has no rows to pick before a live list arrives: use --keys \"down\" instead".into());
+  }
   let worktrees = match options.live {
     Some(_) => None,
     None => Some(gwm_client::list(&repo)?),
