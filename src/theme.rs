@@ -19,7 +19,11 @@ pub const ERROR: u32 = 0xff7a7a;
 const INK: u32 = 0xebebeb;
 /// The window's own fill, laid over the blurred desktop.
 const SHELL: u32 = 0x171717;
-const SHELL_ALPHA: f32 = 0.85;
+/// Monocode's default is 0.85 (its sidebar opacity setting, `settings/
+/// preferences.rs`), but the captures it publishes are far more see-through,
+/// and they are the reference. Measured on them, wash included: about 0.48 on
+/// minicode's title bar over a plain sky, 0.35 to 0.4 on fable52-1's status bar.
+const SHELL_ALPHA: f32 = 0.45;
 /// How dark the bottom of the central card gets. Monocode paints no gradient:
 /// in its screenshots the darkening is the desktop showing through the glass.
 /// This stands in for it on any desktop. Set it to 0 to drop it.

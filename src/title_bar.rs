@@ -85,7 +85,8 @@ fn drag_area() -> gpui::Div {
 fn tab(worktree: &Worktree) -> impl IntoElement {
   div()
     .h(theme::TAB_HEIGHT)
-    .max_w(theme::TAB_MAX_WIDTH)
+    // A tab alone takes Monocode's full tab width, whatever its name's length.
+    .w(theme::TAB_MAX_WIDTH)
     .min_w_0()
     .flex()
     .items_center()
