@@ -4,10 +4,13 @@
 
 ```bash
 cargo run -- /path/to/a/repo      # launch the app
-cargo test                        # tests
-cargo clippy --all-targets -- -D warnings
+cargo test                        # tests, the app and gwm-client
+cargo test -p gwm-client          # the gwm layer alone, without building GPUI
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
+
+`gwm-client`'s tests drive a real `gwm daemon` on throwaway repos: they need `gwm` on your `PATH`, and fail without it.
 
 If `rustc` resolves to something older than your rustup stable, for example through a nix profile, put `~/.cargo/bin` first on your `PATH`.
 

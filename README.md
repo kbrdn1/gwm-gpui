@@ -3,7 +3,7 @@
 A native desktop app for [gwm](https://github.com/kbrdn1/gwm-cli), the git worktree manager, built on [GPUI](https://www.gpui.rs).
 
 > [!NOTE]
-> Early scaffold, macOS only. Today it opens a window and lists the worktrees of a repo, nothing more.
+> Early scaffold, macOS only. Today it opens a window and lists the worktrees of a repo, kept live through gwm's daemon, nothing more.
 
 ## Requirements
 
@@ -25,9 +25,20 @@ gwm stays the source of truth: this app holds no worktree logic. It is one more 
 
 | Need | Through |
 |---|---|
-| Read (`list`, `doctor`, `path`) | `gwm <cmd> --format=json` today, the daemon's JSON-RPC 2.0 next |
-| Live updates | the daemon's `subscribe` → `worktrees.changed` (planned) |
+| Read the worktree list | the daemon's JSON-RPC 2.0, `gwm list --format=json` when no daemon can be had |
+| Live updates | the daemon's `subscribe` → `worktrees.changed`, refused unless `params.schema_version` is the one this build reads |
 | Change (`create`, `remove`, `review`) | a `gwm` subprocess (planned) |
+
+### Live updates
+
+A `gwm daemon` serves one repo, and its default socket is shared by every repo. So the app:
+
+1. uses a daemon on gwm's default socket, but only once its first snapshot shows this repo;
+2. else uses a daemon on its own socket for this repo, `$TMPDIR/gwm-gpui-<hash>.sock`, left by an earlier run;
+3. else starts `gwm daemon` on that socket, and stops it when the app quits;
+4. else lists the worktrees once with `gwm list --format=json`.
+
+A line above the list says which: live, reconnecting after a lost stream, or not live and why. If the app is killed instead of quit, the daemon it started keeps running, and the next launch picks it up.
 
 It does not link the `gwm-cli` crate: its `[lib]` target is an internal test seam, [not covered by SemVer](https://github.com/kbrdn1/gwm-cli/blob/main/docs/6.development/3.stability.md).
 

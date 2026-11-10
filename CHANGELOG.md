@@ -13,5 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - A GPUI window that lists the worktrees of a repo through `gwm list --format=json`.
+- The list stays live through gwm's daemon (`subscribe` → `worktrees.changed`). The app uses a daemon already serving the repo, or starts one and stops it on quit, and falls back to a single `gwm list`. A line above the list says whether it is live (#3).
 
 ## Past releases
