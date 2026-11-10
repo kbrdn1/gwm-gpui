@@ -262,6 +262,8 @@ impl Render for Workspace {
       .text_color(theme::ink(1.))
       .child(title_bar::title_bar(self.sidebar_open, selected, cx))
       .child(
+        // As in Monocode, the sidebar runs down to the window's bottom edge, and
+        // the status bar sits under the card's column only.
         div()
           .flex_1()
           .min_h_0()
@@ -275,30 +277,43 @@ impl Render for Workspace {
               cx,
             ))
           })
-          // Closed, the sidebar leaves a gutter on the left as on the right.
-          .when(!self.sidebar_open, |body| body.child(gutter()))
           .child(
-            // The corners are painted over the card's border box, so they sit
-            // beside it, not in it: inside, they would stop at its border.
             div()
               .flex_1()
               .min_w_0()
-              .relative()
+              .flex()
+              .flex_col()
               .child(
                 div()
-                  .size_full()
-                  .rounded(theme::CARD_RADIUS)
-                  .border_1()
-                  .border_color(theme::card_border())
-                  .bg(theme::card_shade())
-                  .overflow_hidden()
-                  .child(card),
+                  .flex_1()
+                  .min_h_0()
+                  .flex()
+                  // Closed, the sidebar leaves a gutter on the left as on the right.
+                  .when(!self.sidebar_open, |row| row.child(gutter()))
+                  .child(
+                    // The corners are painted over the card's border box, so they sit
+                    // beside it, not in it: inside, they would stop at its border.
+                    div()
+                      .flex_1()
+                      .min_w_0()
+                      .relative()
+                      .child(
+                        div()
+                          .size_full()
+                          .rounded(theme::CARD_RADIUS)
+                          .border_1()
+                          .border_color(theme::card_border())
+                          .bg(theme::card_shade())
+                          .overflow_hidden()
+                          .child(card),
+                      )
+                      .child(card_corners()),
+                  )
+                  .child(gutter()),
               )
-              .child(card_corners()),
-          )
-          .child(gutter()),
+              .child(status_bar::status_bar(self.state.source.as_ref(), count)),
+          ),
       )
-      .child(status_bar::status_bar(self.state.source.as_ref(), count))
   }
 }
 

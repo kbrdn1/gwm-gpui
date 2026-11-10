@@ -24,9 +24,10 @@ const SHELL: u32 = 0x171717;
 /// and they are the reference. Measured on them, wash included: about 0.48 on
 /// minicode's title bar over a plain sky, 0.35 to 0.4 on fable52-1's status bar.
 const SHELL_ALPHA: f32 = 0.45;
-/// How dark the bottom of the central card gets. Monocode paints no gradient:
-/// in its screenshots the darkening is the desktop showing through the glass.
-/// This stands in for it on any desktop. Set it to 0 to drop it.
+/// How dark the bottom of the central card gets. In Monocode's captures, the
+/// card's darkening is its project background image fading out
+/// (`project_background.rs`, `background_fade` in monocode-core). gwm-gpui has
+/// no background image: a plain gradient stands in for that fade.
 const CARD_SHADE_ALPHA: f32 = 0.22;
 
 pub const UI_FONT: &str = ".SystemUIFont";
