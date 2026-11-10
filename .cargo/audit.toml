@@ -19,9 +19,9 @@ ignore = [
   # ttf-parser 0.25.1: a direct dependency of gpui-pre, and also reached through
   # usvg -> fontdb, usvg -> rustybuzz and gpui-pre-wgpu -> cosmic-text -> fontdb.
   "RUSTSEC-2026-0192",
-  # zbus_names 4.3.5, Linux only: gpui-pre-linux -> oo7 / ashpd / notify-rust
-  # -> zbus -> zbus_names. Not in the macOS build, but cargo audit reads the
-  # whole Cargo.lock, every target included.
+  # zbus_names 4.3.5, Linux only: gpui-pre-linux -> oo7 (directly and through
+  # ashpd) or notify-rust -> zbus -> zbus_names. Not in the macOS build, but
+  # cargo audit reads the whole Cargo.lock, every target included.
   "RUSTSEC-2026-0371",
   # zvariant 5.15.1, Linux only: the same zbus path, plus oo7 directly.
   "RUSTSEC-2026-0370",
