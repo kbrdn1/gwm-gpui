@@ -52,6 +52,22 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # gwm-client's tests drive a real `gwm daemon` and fail without it. Pinned,
+      # and checked against the release's checksum: bump it in its own PR.
+      - name: install gwm
+        env:
+          GWM_VERSION: 1.11.0
+        run: |
+          archive="gwm-v${GWM_VERSION}-aarch64-apple-darwin"
+          base="https://github.com/kbrdn1/gwm-cli/releases/download/v${GWM_VERSION}"
+          curl -fsSLO "$base/$archive.tar.gz"
+          curl -fsSLO "$base/$archive.tar.gz.sha256"
+          echo "$(cut -d' ' -f1 "$archive.tar.gz.sha256")  $archive.tar.gz" | shasum -a 256 -c
+          tar -xzf "$archive.tar.gz"
+          mkdir -p "$HOME/.local/bin"
+          install -m 755 "$archive/gwm" "$HOME/.local/bin/gwm"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: gwm --version
       - run: cargo test --locked --workspace
 
   audit:
