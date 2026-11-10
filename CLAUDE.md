@@ -8,6 +8,7 @@ App desktop native pour [gwm](https://github.com/kbrdn1/gwm-cli), en Rust sur GP
 - Build : `cargo build`
 - Test  : `cargo test`
 - Lint/Format : `cargo clippy --all-targets -- -D warnings` · `cargo fmt --all`
+- Audit : `cargo audit --deny warnings` (lit `.cargo/audit.toml`)
 - Run   : `cargo run -- <chemin-du-repo>` (par défaut le dossier courant). `gwm` doit être sur le `PATH`.
 
 Premier build long (GPUI compile tout) : `nice -n 10 cargo build -j 4` pour ne pas saturer la machine.
@@ -45,6 +46,7 @@ Premier build long (GPUI compile tout) : `nice -n 10 cargo build -j 4` pour ne p
 - 🔴 **gwm reste la source de vérité** : aucune logique de worktree ici. Pas de dépendance Cargo sur `gwm-cli` : son `[lib]` est un point d'accès interne pour ses tests, hors SemVer. Lectures par le JSON gelé (`docs/schema/` de gwm-cli) ou le daemon JSON-RPC, écritures par un subprocess `gwm`. Détail : `.claude/rules/gwm-contract.md`.
 - Une fonctionnalité qui demande un changement de contrat se fait d'abord dans gwm-cli.
 - `gpui-pre` vient de crates.io, **non modifié** : pas de flou d'arrière-plan ni de fondus comme Monocode Native, qui maintient une copie patchée de GPUI dans `vendor/`. Monocode est sous MIT : copier du code impose son attribution dans `NOTICE`.
+- `.cargo/audit.toml` ignore 6 advisories `unmaintained` (aucune vulnérabilité), toutes transitives via GPUI : les sortir du graphe demanderait de forker GPUI. **À réexaminer à chaque bump de `gpui-pre`** : `cargo tree -i <crate> --target all -e normal,build` par ID, et retirer ceux qui ne sortent plus. Jamais d'ID ajouté sans sa raison et son chemin, et la CI garde `--deny warnings`.
 - `runtime_shaders` : les shaders Metal compilent au lancement, il suffit des Command Line Tools.
 - Pas de hot reload avec GPUI : on relance.
 - `main` n'est pas protégée pour l'instant, à durcir comme gwm-cli quand le projet se stabilise.
