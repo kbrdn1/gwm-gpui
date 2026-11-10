@@ -109,31 +109,46 @@ impl Spawned {
   }
 }
 
-/// Feeds `on_event` until it returns `false`, or until there is nothing more
-/// to say: a fallback list, or a failure. Blocks: run it on a thread of its own.
-pub fn watch(repo: &Repo, sockets: &Sockets, spawned: &Spawned, mut on_event: impl FnMut(Event) -> bool) {
+/// Feeds `on_event` for the repo at `path` until it returns `false`, or until
+/// there is nothing more to say: a fallback list, or a failure. `sockets` names
+/// where to look once the repo is located. Blocks: run it on a thread of its own.
+pub fn watch(
+  path: &Path,
+  sockets: impl FnOnce(&Repo) -> Sockets,
+  spawned: &Spawned,
+  mut on_event: impl FnMut(Event) -> bool,
+) {
+  let repo = match Repo::locate(path) {
+    Ok(repo) => repo,
+    // Without git's name for the repo (a bare one, say), no daemon can be told
+    // apart. gwm is the judge of what it can list, not git.
+    Err(why) => return once(path, format!("git cannot locate the repo: {why}"), &mut on_event),
+  };
+  let sockets = sockets(&repo);
   loop {
-    let reason = match follow(repo, sockets, spawned, &mut on_event) {
+    let reason = match follow(&repo, &sockets, spawned, &mut on_event) {
       Outcome::Stopped => return,
       Outcome::Contract(message) => {
         on_event(Event::Failed(message));
         return;
       }
-      Outcome::NoDaemon(reason) => {
-        if on_event(Event::Source(Source::Once(reason))) {
-          on_event(match crate::list(&repo.toplevel) {
-            Ok(worktrees) => Event::Snapshot(worktrees),
-            Err(error) => Event::Failed(error),
-          });
-        }
-        return;
-      }
+      Outcome::NoDaemon(reason) => return once(&repo.toplevel, reason, &mut on_event),
       Outcome::Lost(reason) => reason,
     };
     if !on_event(Event::Source(Source::Lost(reason))) {
       return;
     }
     thread::sleep(RECONNECT_DELAY);
+  }
+}
+
+/// The fallback: one `gwm list --format=json`, and why it is not live.
+fn once(path: &Path, reason: String, on_event: &mut impl FnMut(Event) -> bool) {
+  if on_event(Event::Source(Source::Once(reason))) {
+    on_event(match crate::list(path) {
+      Ok(worktrees) => Event::Snapshot(worktrees),
+      Err(error) => Event::Failed(error),
+    });
   }
 }
 
@@ -155,8 +170,10 @@ enum Session {
 
 fn follow(repo: &Repo, sockets: &Sockets, spawned: &Spawned, on_event: &mut impl FnMut(Event) -> bool) -> Outcome {
   let mut missed = String::new();
-  for socket in [Some(&sockets.default), sockets.own.as_ref()].into_iter().flatten() {
-    match session(repo, socket, Source::Daemon(socket.clone()), on_event) {
+  // The own socket is named after this repo: whatever answers there is ours.
+  let found = [(Some(&sockets.default), false), (sockets.own.as_ref(), true)];
+  for (socket, ours) in found.into_iter().filter_map(|(socket, ours)| Some((socket?, ours))) {
+    match session(repo, socket, Source::Daemon(socket.clone()), ours, on_event) {
       Session::Missed(why) => missed = why,
       Session::Over(outcome) => return outcome,
     }
@@ -167,9 +184,10 @@ fn follow(repo: &Repo, sockets: &Sockets, spawned: &Spawned, on_event: &mut impl
   // A daemon of ours that died: reap it before starting the next.
   spawned.stop();
   if let Err(why) = spawn(&repo.toplevel, own, spawned) {
-    return Outcome::NoDaemon(why);
+    // A daemon still on the own socket makes the spawn fail: its own miss is the cause.
+    return Outcome::NoDaemon(format!("{why} (before that: {missed})"));
   }
-  match session(repo, own, Source::OwnDaemon(own.clone()), on_event) {
+  match session(repo, own, Source::OwnDaemon(own.clone()), true, on_event) {
     Session::Over(outcome) => outcome,
     Session::Missed(why) => {
       spawned.stop();
@@ -178,11 +196,17 @@ fn follow(repo: &Repo, sockets: &Sockets, spawned: &Spawned, on_event: &mut impl
   }
 }
 
-fn session(repo: &Repo, socket: &Path, source: Source, on_event: &mut impl FnMut(Event) -> bool) -> Session {
-  // A daemon the app just started serves this repo by construction. One found
-  // on a socket may serve another, so what it sends before its first snapshot
-  // says nothing about this repo: the next socket gets its chance.
-  let started_here = matches!(source, Source::OwnDaemon(_));
+/// `ours`: the socket is the app's own for this repo. A daemon there serves this
+/// repo, so output it cannot read is contract drift, and ends the watch. One on
+/// the shared socket may serve another repo: what it sends before its first
+/// snapshot says nothing about this one, and the next socket gets its chance.
+fn session(
+  repo: &Repo,
+  socket: &Path,
+  source: Source,
+  ours: bool,
+  on_event: &mut impl FnMut(Event) -> bool,
+) -> Session {
   let mut snapshots = 0;
   let mut verdict = None;
   let result = daemon::subscribe(socket, |worktrees| {
@@ -211,7 +235,7 @@ fn session(repo: &Repo, socket: &Path, source: Source, on_event: &mut impl FnMut
   }
   match result {
     Ok(()) => Session::Over(Outcome::Stopped),
-    Err(daemon::Error::Contract(message)) if snapshots == 0 && !started_here => Session::Missed(message),
+    Err(daemon::Error::Contract(message)) if snapshots == 0 && !ours => Session::Missed(message),
     Err(daemon::Error::Contract(message)) => Session::Over(Outcome::Contract(message)),
     Err(daemon::Error::Unreachable(why)) if snapshots == 0 => Session::Missed(why),
     Err(daemon::Error::Unreachable(why)) => Session::Over(Outcome::Lost(why)),

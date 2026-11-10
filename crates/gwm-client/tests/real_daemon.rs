@@ -83,12 +83,24 @@ impl Drop for StopOnDrop {
 
 /// Runs [`watch`] on a thread and hands its events over a channel.
 fn start_watch(path: &Path, sockets: Sockets, spawned: &Spawned) -> (Receiver<Event>, thread::JoinHandle<()>) {
-  let repo = Repo::locate(path).unwrap();
   let (events, received) = mpsc::channel();
-  let spawned = spawned.clone();
-  let handle = thread::spawn(move || watch(&repo, &sockets, &spawned, |event| events.send(event).is_ok()));
+  let (path, spawned) = (path.to_owned(), spawned.clone());
+  let handle = thread::spawn(move || watch(&path, |_| sockets, &spawned, |event| events.send(event).is_ok()));
   (received, handle)
 }
+
+/// A fake daemon on `socket` that answers one `subscribe` with `line`.
+fn fake_daemon(socket: &Path, line: &'static str) {
+  let listener = UnixListener::bind(socket).unwrap();
+  thread::spawn(move || {
+    let (connection, _) = listener.accept().unwrap();
+    let mut request = String::new();
+    BufReader::new(&connection).read_line(&mut request).unwrap();
+    let _ = writeln!(&connection, "{line}");
+  });
+}
+
+const DRIFTED: &str = r#"{"jsonrpc":"2.0","method":"worktrees.changed","params":{"schema_version":2,"worktrees":{}}}"#;
 
 fn next(events: &Receiver<Event>) -> Event {
   events.recv_timeout(WAIT).expect("an event within 20 s")
@@ -123,10 +135,31 @@ fn starts_its_own_daemon_follows_changes_and_stops_it() {
   git(&acme, &["worktree", "add", "-q", "../feat-1", "-b", "feat/#1-x"]);
   assert_eq!(snapshot(&events), ["acme", "feat-1"]);
 
+  // Its daemon gone, the list says so, then goes live again on a new one.
   spawned.stop();
   assert!(UnixStream::connect(&own).is_err(), "the daemon is gone");
-  // The stream ends with the daemon, and `watch` returns once its events are
-  // no longer wanted. It may have started another daemon by then: `_stop` ends it.
+  assert!(matches!(next(&events), Event::Source(Source::Lost(_))));
+  assert_eq!(next(&events), Event::Source(Source::OwnDaemon(own.clone())));
+  assert_eq!(snapshot(&events), ["acme", "feat-1"]);
+  drop(events);
+  spawned.stop();
+  handle.join().unwrap();
+}
+
+#[test]
+fn uses_the_daemon_left_on_its_own_socket() {
+  let dir = tempfile::tempdir().unwrap();
+  let acme = repo(dir.path(), "acme");
+  let sockets = sockets(&dir, true);
+  let own = sockets.own.clone().unwrap();
+  let left = UserDaemon::start(&acme, &own);
+  let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
+  let (events, handle) = start_watch(&acme, sockets, &spawned);
+
+  assert_eq!(next(&events), Event::Source(Source::Daemon(own)));
+  assert_eq!(snapshot(&events), ["acme"]);
+  drop(left);
   assert!(matches!(next(&events), Event::Source(Source::Lost(_))));
   drop(events);
   handle.join().unwrap();
@@ -202,14 +235,7 @@ fn moves_past_a_daemon_it_cannot_read_on_the_shared_socket() {
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
   let sockets = sockets(&dir, true);
-  let listener = UnixListener::bind(&sockets.default).unwrap();
-  thread::spawn(move || {
-    let (connection, _) = listener.accept().unwrap();
-    let mut request = String::new();
-    BufReader::new(&connection).read_line(&mut request).unwrap();
-    let line = r#"{"jsonrpc":"2.0","method":"worktrees.changed","params":{"schema_version":2,"worktrees":{}}}"#;
-    let _ = writeln!(&connection, "{line}");
-  });
+  fake_daemon(&sockets.default, DRIFTED);
   let own = sockets.own.clone().unwrap();
   let spawned = Spawned::default();
   let _stop = StopOnDrop(spawned.clone());
@@ -219,6 +245,40 @@ fn moves_past_a_daemon_it_cannot_read_on_the_shared_socket() {
   assert_eq!(snapshot(&events), ["acme"]);
   drop(events);
   spawned.stop();
+  handle.join().unwrap();
+}
+
+/// The own socket is named after this repo: a contract it cannot read there is
+/// drift, shown to the user, never a list parsed in silence.
+#[test]
+fn a_contract_it_cannot_read_on_its_own_socket_ends_the_watch() {
+  let dir = tempfile::tempdir().unwrap();
+  let acme = repo(dir.path(), "acme");
+  let sockets = sockets(&dir, true);
+  fake_daemon(sockets.own.as_ref().unwrap(), DRIFTED);
+  let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
+  let (events, handle) = start_watch(&acme, sockets, &spawned);
+
+  assert!(matches!(next(&events), Event::Failed(message) if message.contains("contract version 2")));
+  handle.join().unwrap();
+}
+
+/// git names no toplevel in a bare repo, but gwm can still list it.
+#[test]
+fn a_repo_git_cannot_locate_still_gets_one_gwm_list() {
+  let dir = tempfile::tempdir().unwrap();
+  let status = Command::new("git")
+    .args(["init", "-q", "--bare", "acme.git"])
+    .current_dir(dir.path())
+    .status()
+    .unwrap();
+  assert!(status.success());
+  let spawned = Spawned::default();
+  let (events, handle) = start_watch(&dir.path().join("acme.git"), sockets(&dir, true), &spawned);
+
+  assert!(matches!(next(&events), Event::Source(Source::Once(reason)) if reason.starts_with("git cannot locate")));
+  assert!(matches!(next(&events), Event::Snapshot(_)), "gwm lists a bare repo");
   handle.join().unwrap();
 }
 
