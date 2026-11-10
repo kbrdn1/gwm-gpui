@@ -34,9 +34,9 @@ gwm stays the source of truth: this app holds no worktree logic. It is one more 
 A `gwm daemon` serves one repo, and its default socket is shared by every repo. So the app:
 
 1. uses a daemon on gwm's default socket, but only once its first snapshot lists the worktree the app was opened in;
-2. else uses a daemon on its own socket for this repo, `$TMPDIR/gwm-gpui-<hash>.sock`, the hash of the repo's common git directory, so every worktree of the repo shares it;
+2. else uses a daemon on its own socket for this repo, `gwm-gpui-<hash>.sock` in the same directory as gwm's default socket (`$XDG_RUNTIME_DIR`, else `$TMPDIR`). The hash is of the repo's common git directory, so every worktree of the repo shares it;
 3. else starts `gwm daemon` on that socket, and stops it when the app quits;
-4. else lists the worktrees once with `gwm list --format=json`.
+4. else, or when git cannot locate the repo (a bare one), lists the worktrees once with `gwm list --format=json`.
 
 A line above the list says which: live, reconnecting after a lost stream, or not live and why. If the app is killed instead of quit, the daemon it started keeps running: the next launch uses it, but does not own it, so it runs until you stop it.
 
