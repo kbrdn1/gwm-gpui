@@ -1,0 +1,310 @@
+//! Keeps a worktree list live: finds or starts a `gwm daemon` for the repo,
+//! follows its stream, and falls back to one `gwm list` when no daemon can be
+//! had.
+//!
+//! gwm documents the daemon as started by the user, one per repo, on a socket
+//! that is shared by default. A daemon on the default socket may therefore
+//! serve another repo: it is only used once its first snapshot shows this one.
+//! Failing that, the app runs a daemon of its own on a socket of its own, one
+//! per repo, and stops it when it quits ([`Spawned`]).
+
+use std::{
+  io::{BufRead, BufReader},
+  os::unix::ffi::OsStrExt,
+  path::{Path, PathBuf},
+  process::{Child, Command, Stdio},
+  sync::{Arc, Mutex, PoisonError, mpsc},
+  thread,
+  time::Duration,
+};
+
+use crate::{Worktree, daemon};
+
+/// How long a daemon the app starts may take to print that it listens.
+const STARTUP: Duration = Duration::from_secs(10);
+const READY: &str = "gwm daemon listening on ";
+/// The pause before looking for a daemon again once a stream is lost, so a
+/// daemon that dies right after starting is not restarted in a tight loop.
+const RECONNECT_DELAY: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Event {
+  Snapshot(Vec<Worktree>),
+  /// Where the next snapshots come from.
+  Source(Source),
+  /// Live updates stopped for good: a message for the user. Nothing follows.
+  Failed(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Source {
+  /// Live, through a daemon that was already running.
+  Daemon(PathBuf),
+  /// Live, through a daemon the app started.
+  OwnDaemon(PathBuf),
+  /// The stream ended, and a daemon is being looked for again: the list on
+  /// screen may be stale.
+  Lost(String),
+  /// Not live: one `gwm list --format=json`, and why no daemon could be used.
+  Once(String),
+}
+
+/// The sockets to try, in order.
+#[derive(Clone, Debug)]
+pub struct Sockets {
+  /// Where a daemon the user started listens by default.
+  pub default: PathBuf,
+  /// The app's own socket for this repo, `None` when there is no private
+  /// directory to put it in.
+  pub own: Option<PathBuf>,
+}
+
+impl Sockets {
+  pub fn for_repo(repo: &Path) -> Self {
+    let repo = repo.canonicalize().unwrap_or_else(|_| repo.to_owned());
+    let base = daemon::base_dir(
+      std::env::var_os("XDG_RUNTIME_DIR").as_deref(),
+      std::env::var_os("TMPDIR").as_deref(),
+    );
+    // A short hash, not the repo path: macOS caps a socket path at 104 bytes,
+    // and `$TMPDIR` already takes about half.
+    let own = daemon::is_private(&base)
+      .then(|| base.join(format!("gwm-gpui-{:016x}.sock", fnv1a(repo.as_os_str().as_bytes()))));
+    Self {
+      default: daemon::default_socket(),
+      own,
+    }
+  }
+}
+
+/// FNV-1a: unlike `DefaultHasher`, it gives the same name on every build, so a
+/// relaunch finds a daemon an earlier run left behind.
+fn fnv1a(bytes: &[u8]) -> u64 {
+  bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+    (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+  })
+}
+
+/// The `gwm daemon` the app started, if any. A child outlives its parent, so
+/// the app calls [`Spawned::stop`] when it quits.
+#[derive(Clone, Default)]
+pub struct Spawned(Arc<Mutex<Option<Child>>>);
+
+impl Spawned {
+  pub fn stop(&self) {
+    if let Some(mut child) = self.0.lock().unwrap_or_else(PoisonError::into_inner).take() {
+      // An error only means it already exited. `wait` reaps it either way.
+      let _ = child.kill();
+      let _ = child.wait();
+    }
+  }
+
+  fn keep(&self, child: Child) {
+    *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(child);
+  }
+}
+
+/// Feeds `on_event` until it returns `false`, or until there is nothing more
+/// to say: a fallback list, or a failure. Blocks: run it on a thread of its own.
+pub fn watch(repo: &Path, sockets: &Sockets, spawned: &Spawned, mut on_event: impl FnMut(Event) -> bool) {
+  let repo = match repo.canonicalize() {
+    Ok(repo) => repo,
+    Err(error) => {
+      on_event(Event::Failed(format!("{}: {error}", repo.display())));
+      return;
+    }
+  };
+  loop {
+    let reason = match follow(&repo, sockets, spawned, &mut on_event) {
+      Outcome::Stopped => return,
+      Outcome::Contract(message) => {
+        on_event(Event::Failed(message));
+        return;
+      }
+      Outcome::NoDaemon(reason) => {
+        if on_event(Event::Source(Source::Once(reason))) {
+          on_event(match crate::list(&repo) {
+            Ok(worktrees) => Event::Snapshot(worktrees),
+            Err(error) => Event::Failed(error),
+          });
+        }
+        return;
+      }
+      Outcome::Lost(reason) => reason,
+    };
+    if !on_event(Event::Source(Source::Lost(reason))) {
+      return;
+    }
+    thread::sleep(RECONNECT_DELAY);
+  }
+}
+
+enum Outcome {
+  /// `on_event` asked to stop.
+  Stopped,
+  Contract(String),
+  /// A stream was followed, then ended.
+  Lost(String),
+  /// No daemon could be followed, and why.
+  NoDaemon(String),
+}
+
+enum Session {
+  /// Nothing came from this socket: try the next one.
+  Missed(String),
+  Over(Outcome),
+}
+
+fn follow(repo: &Path, sockets: &Sockets, spawned: &Spawned, on_event: &mut impl FnMut(Event) -> bool) -> Outcome {
+  let mut missed = String::new();
+  for socket in [Some(&sockets.default), sockets.own.as_ref()].into_iter().flatten() {
+    match session(repo, socket, Source::Daemon(socket.clone()), on_event) {
+      Session::Missed(why) => missed = why,
+      Session::Over(outcome) => return outcome,
+    }
+  }
+  let Some(own) = &sockets.own else {
+    return Outcome::NoDaemon(format!("{missed}, and no private directory to start one in"));
+  };
+  // A daemon of ours that died: reap it before starting the next.
+  spawned.stop();
+  if let Err(why) = spawn(repo, own, spawned) {
+    return Outcome::NoDaemon(why);
+  }
+  match session(repo, own, Source::OwnDaemon(own.clone()), on_event) {
+    Session::Over(outcome) => outcome,
+    Session::Missed(why) => {
+      spawned.stop();
+      Outcome::NoDaemon(why)
+    }
+  }
+}
+
+fn session(repo: &Path, socket: &Path, source: Source, on_event: &mut impl FnMut(Event) -> bool) -> Session {
+  let mut snapshots = 0;
+  let mut verdict = None;
+  let result = daemon::subscribe(socket, |worktrees| {
+    if snapshots == 0 {
+      if !serves(&worktrees, repo) {
+        verdict = Some(Session::Missed(format!(
+          "the daemon on {} serves another repo",
+          socket.display()
+        )));
+        return false;
+      }
+      if !on_event(Event::Source(source.clone())) {
+        verdict = Some(Session::Over(Outcome::Stopped));
+        return false;
+      }
+    }
+    snapshots += 1;
+    let more = on_event(Event::Snapshot(worktrees));
+    if !more {
+      verdict = Some(Session::Over(Outcome::Stopped));
+    }
+    more
+  });
+  if let Some(verdict) = verdict {
+    return verdict;
+  }
+  match result {
+    Ok(()) => Session::Over(Outcome::Stopped),
+    Err(daemon::Error::Contract(message)) => Session::Over(Outcome::Contract(message)),
+    Err(daemon::Error::Unreachable(why)) if snapshots == 0 => Session::Missed(why),
+    Err(daemon::Error::Unreachable(why)) => Session::Over(Outcome::Lost(why)),
+  }
+}
+
+/// Whether a snapshot is this repo's: `repo` is one of its worktrees, or inside
+/// one. gwm's daemon has no method that names its repo, so this is how a shared
+/// socket is told apart.
+fn serves(worktrees: &[Worktree], repo: &Path) -> bool {
+  worktrees.iter().any(|worktree| {
+    let path = worktree.path.canonicalize().unwrap_or_else(|_| worktree.path.clone());
+    repo.starts_with(path)
+  })
+}
+
+/// Starts `gwm daemon` on `socket` and waits until it listens.
+fn spawn(repo: &Path, socket: &Path, spawned: &Spawned) -> Result<(), String> {
+  let mut child = Command::new("gwm")
+    .arg("daemon")
+    .arg("--socket")
+    .arg(socket)
+    .current_dir(repo)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped())
+    .spawn()
+    .map_err(|error| format!("could not run gwm daemon: {error}"))?;
+  let stderr = child.stderr.take().expect("stderr is piped");
+  let (ready_tx, ready_rx) = mpsc::channel();
+  // Watch stderr for the readiness line, then keep draining it: a daemon
+  // blocked on a full pipe would stop answering.
+  thread::spawn(move || {
+    let mut ready_tx = Some(ready_tx);
+    let mut last = String::new();
+    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+      if let Some(ready_tx) = ready_tx.take_if(|_| line.starts_with(READY)) {
+        let _ = ready_tx.send(Ok(()));
+      } else if ready_tx.is_some() && !line.trim().is_empty() {
+        last = line;
+      }
+    }
+    if let Some(ready_tx) = ready_tx {
+      let _ = ready_tx.send(Err(last));
+    }
+  });
+  match ready_rx.recv_timeout(STARTUP) {
+    Ok(Ok(())) => {
+      spawned.keep(child);
+      Ok(())
+    }
+    Ok(Err(last)) => {
+      let _ = child.wait();
+      Err(if last.is_empty() {
+        "gwm daemon exited".to_owned()
+      } else {
+        format!("gwm daemon exited: {last}")
+      })
+    }
+    Err(_) => {
+      let _ = child.kill();
+      let _ = child.wait();
+      Err(format!("gwm daemon did not listen within {} s", STARTUP.as_secs()))
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn at(path: &str) -> Worktree {
+    Worktree {
+      name: "wt".to_owned(),
+      path: PathBuf::from(path),
+      branch: None,
+      status: crate::Status { is_dirty: false },
+    }
+  }
+
+  #[test]
+  fn a_snapshot_serves_its_worktrees_and_what_is_inside_them() {
+    let snapshot = [at("/repos/acme/"), at("/repos/acme-worktrees/feat-1")];
+    assert!(serves(&snapshot, Path::new("/repos/acme")));
+    assert!(serves(&snapshot, Path::new("/repos/acme/src")));
+    assert!(serves(&snapshot, Path::new("/repos/acme-worktrees/feat-1")));
+    assert!(!serves(&snapshot, Path::new("/repos/acme-api")));
+    assert!(!serves(&snapshot, Path::new("/repos")));
+  }
+
+  #[test]
+  fn the_own_socket_name_is_stable_and_short() {
+    // Pinned: a different hash would orphan the daemon an earlier run left behind.
+    assert_eq!(fnv1a(b"/repos/acme"), fnv1a(b"/repos/acme"));
+    assert_ne!(fnv1a(b"/repos/acme"), fnv1a(b"/repos/acme-api"));
+    assert_eq!(fnv1a(b""), 0xcbf2_9ce4_8422_2325);
+    assert_eq!(fnv1a(b"a"), 0xaf63_dc4c_8601_ec8c);
+  }
+}

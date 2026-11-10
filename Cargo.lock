@@ -1921,8 +1921,10 @@ checksum = "99b18b06f5026b3d312488eacfdddbe78f82b4bf32bb2d2bc3186e31e552b797"
 name = "gwm-client"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

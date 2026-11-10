@@ -1,23 +1,31 @@
 //! The worktree list, read through gwm's frozen machine contract
-//! (`docs/schema/worktree-list.schema.json` in gwm-cli).
+//! (`docs/schema/worktree-list.schema.json` in gwm-cli): once with
+//! `gwm list --format=json`, or live from the daemon ([`watch`]).
 //!
 //! Types declare only the fields the app reads and never `deny_unknown_fields`:
 //! the contract adds optional fields without a version bump, and asks consumers
 //! to ignore the ones they don't know.
 
-use std::{path::Path, process::Command};
+pub mod daemon;
+pub mod watch;
+
+use std::{
+  path::{Path, PathBuf},
+  process::Command,
+};
 
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Worktree {
   pub name: String,
+  pub path: PathBuf,
   /// `None` on a detached HEAD.
   pub branch: Option<String>,
   pub status: Status,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Status {
   pub is_dirty: bool,
 }
@@ -43,9 +51,10 @@ fn parse(json: &[u8]) -> Result<Vec<Worktree>, String> {
 mod tests {
   use super::*;
 
-  fn clean(name: &str, branch: Option<&str>) -> Worktree {
+  fn clean(name: &str, path: &str, branch: Option<&str>) -> Worktree {
     Worktree {
       name: name.to_owned(),
+      path: PathBuf::from(path),
       branch: branch.map(str::to_owned),
       status: Status { is_dirty: false },
     }
@@ -72,6 +81,7 @@ mod tests {
       parse(json),
       Ok(vec![clean(
         "fix-57-rate-limit-headers",
+        "/Users/kbrdn1/gwm-demo/worktrees/acme-api/fix-57-rate-limit-headers",
         Some("fix/#57-rate-limit-headers")
       )])
     );
@@ -79,15 +89,16 @@ mod tests {
 
   #[test]
   fn a_detached_head_has_no_branch() {
-    let json = br#"[{ "name": "wt", "branch": null, "status": { "is_dirty": false } }]"#;
-    assert_eq!(parse(json), Ok(vec![clean("wt", None)]));
+    let json = br#"[{ "name": "wt", "path": "/wt", "branch": null, "status": { "is_dirty": false } }]"#;
+    assert_eq!(parse(json), Ok(vec![clean("wt", "/wt", None)]));
   }
 
   /// The contract's promise to consumers: a field added later must not break us.
   #[test]
   fn ignores_fields_added_after_this_build() {
-    let json = br#"[{ "name": "wt", "branch": "main", "status": { "is_dirty": false }, "from_the_future": 1 }]"#;
-    assert_eq!(parse(json), Ok(vec![clean("wt", Some("main"))]));
+    let json =
+      br#"[{ "name": "wt", "path": "/wt", "branch": "main", "status": { "is_dirty": false }, "from_the_future": 1 }]"#;
+    assert_eq!(parse(json), Ok(vec![clean("wt", "/wt", Some("main"))]));
   }
 
   #[test]
