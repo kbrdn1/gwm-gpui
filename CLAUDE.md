@@ -13,14 +13,19 @@ App desktop native pour [gwm](https://github.com/kbrdn1/gwm-cli), en Rust sur GP
 
 Premier build long (GPUI compile tout) : `nice -n 10 cargo build -j 4` pour ne pas saturer la machine.
 
+Voir l'UI sans écran : `cargo run --example screenshot --features screenshot -- <repo> <out.png> [ligne] [--no-sidebar]`. Rend la fenêtre via `Window::render_to_image` (texture Metal, sans permission d'enregistrement d'écran). La feature tire le `test-support` de GPUI, jamais dans l'app ; la CI passe clippy en `--all-features` pour que l'example ne pourrisse pas. Le PNG garde l'alpha : le poser sur un fond (`magick fond.png rendu.png -composite`, fond en **sRGB**, un `gradient:` est en niveaux de gris et désature tout) pour juger. Le flou du window server n'y est pas.
+
 ## Structure
-- `src/main.rs` : bootstrap de l'application GPUI et `WorktreesView`, la seule vue.
+- `src/main.rs` : bootstrap de l'application (assets, touches, fenêtre, arrêt du daemon au `on_app_quit`). Tout le reste est en lib (`src/lib.rs` : `window_options`, `bind_keys`), pour que l'example de capture ouvre la même fenêtre.
+- Vues, un fichier chacune : `src/workspace.rs` (vue racine : état, sélection, cadre « rounded card » et ses coins peints), `src/title_bar.rs`, `src/sidebar.rs`, `src/detail.rs`, `src/status_bar.rs`. Logique sans fenêtre testée : `State` et `order` (workspace), `sections` (sidebar), `src/age.rs` (format et groupes par jour, ceux de Monocode).
+- `src/assets.rs` + `assets/icons/` : 5 glyphes Hugeicons (MIT) repris de Monocode, embarqués (`include_bytes!`), crédités dans `NOTICE`.
+- `examples/screenshot.rs` : rend la fenêtre hors écran en PNG (voir commandes).
 - `crates/gwm-client/` : tout ce qui parle à gwm, sans dépendance GPUI (workspace Cargo).
   - `src/lib.rs` : types du contrat, `gwm list --format=json`, et `Repo::locate` (un seul `git rev-parse --show-toplevel --git-common-dir`).
   - `src/daemon.rs` : le flux `subscribe` (contrôle de `schema_version`, handshake de 5 s) et le chemin du socket par défaut de gwm.
   - `src/watch.rs` : la stratégie : daemon du socket par défaut s'il sert ce repo (toplevel **égal** à un de ses worktrees, jamais un préfixe : un sous-module n'est pas son parent), puis socket propre à l'app, puis `gwm daemon` lancé par l'app, puis un seul `gwm list`. Une sortie illisible du daemon d'un socket partagé passe au suivant ; sur le socket propre de l'app, c'est une dérive de contrat, affichée. Si git ne localise pas le repo (bare), un seul `gwm list` : c'est gwm qui juge ce qu'il sait lister.
   - `tests/real_daemon.rs` : contre un vrai `gwm daemon` sur des repos jetables.
-- `src/theme.rs` : tokens de couleur, alignés sur le preset `claude-dark` de gwm-cli.
+- `src/theme.rs` : tokens : surfaces, opacités, rayons et tailles de Monocode Native (thème sombre, cadre rounded card) ; accent (`ACCENT`, un seul token) et couleurs d'état de gwm (`claude-dark`).
 - `.claude/rules/` : conventions path-scoped (`gpui-views.md`, `gwm-contract.md`).
 
 ## Conventions de code
@@ -51,7 +56,15 @@ Premier build long (GPUI compile tout) : `nice -n 10 cargo build -j 4` pour ne p
 - Une fonctionnalité qui demande un changement de contrat se fait d'abord dans gwm-cli.
 - Daemon : gwm le documente comme lancé par l'utilisateur, un par repo, sur un socket par défaut partagé. L'app le lance quand même s'il manque, sinon la liste ne serait pas live, sur `<base>/gwm-gpui-<fnv1a du common dir git>.sock`, `<base>` étant celle du socket par défaut de gwm (`$XDG_RUNTIME_DIR`, sinon `$TMPDIR`) : un par repo, quel que soit le worktree ouvert, et l'arrête au `on_app_quit`. Tuée au lieu de quittée, elle laisse le daemon tourner : le lancement suivant le réutilise sans le posséder, il tourne jusqu'à un arrêt à la main. Le daemon ne passe pas par le trust ledger de `.gwm.toml` : pas de `--allow-bootstrap`.
 - Manques du contrat, remontés et non contournés dans gwm-cli : aucune méthode ne nomme le repo d'un daemon (on compare les chemins du premier snapshot), aucune commande ne donne le socket par défaut résolu (la résolution est recopiée dans `daemon.rs`), `subscribe` n'a pas de réponse, le premier snapshot en tient lieu, et le flux n'a pas de heartbeat : un daemon suspendu (Ctrl-Z) ou dont les scans échouent en boucle garde la connexion ouverte sans rien envoyer, et la liste reste affichée « live » alors qu'elle est figée.
-- `gpui-pre` vient de crates.io, **non modifié** : pas de flou d'arrière-plan ni de fondus comme Monocode Native, qui maintient une copie patchée de GPUI dans `vendor/`. Monocode est sous MIT : copier du code impose son attribution dans `NOTICE`.
+- `gpui-pre` vient de crates.io, **non modifié**. Monocode Native maintient une copie patchée de GPUI dans `vendor/` ; ce qui en dépend et manque ici (décision du user, ne pas vendorer sans lui) :
+  - le flou de la fenêtre : sur macOS 27, le matériau `Selection` de `Blurred` n'a plus de couche de backdrop et ne floute peut-être rien (`vendor/gpui-pre-macos/src/window.rs` chez Monocode, matériau `UnderWindowBackground`). Non vérifiable hors écran ;
+  - le matching de graisse (`vendor/gpui-pre-apple/src/text_system.rs`) : `MEDIUM` peut retomber en Regular dans SF ;
+  - les fondus de bord (liste de la sidebar, libellé d'onglet ; `metal_renderer.rs`) : ici, des ellipses ;
+  - le masque de coins de la carte : remplacé par des chemins remplis de wash (`card_corners`), comme Monocode hors macOS ;
+  - le repositionnement Auto Layout des feux (`traffic_lights.rs` chez Monocode) : ici `traffic_light_position` seul.
+  Le mélange alpha non patché donne bien du source-over sur les fonds empilés de l'app (alpha mesuré 0.859 = 0.85 + 0.05 × 0.15).
+- Monocode est sous MIT : copier du code ou des assets impose son attribution dans `NOTICE`.
+- Le panneau des fichiers modifiés de Monocode n'a pas d'équivalent : `gwm status --json` donne `branch`, `issue` et `pr`, aucune liste de fichiers. À ajouter dans gwm-cli d'abord.
 - `.cargo/audit.toml` ignore 6 advisories `unmaintained` (aucune vulnérabilité), toutes transitives via GPUI : les sortir du graphe demanderait de forker GPUI. **À réexaminer à chaque bump de `gpui-pre`** : `cargo tree -i <crate> --target all -e normal,build` par ID, et retirer ceux qui ne sortent plus. Jamais d'ID ajouté sans sa raison et son chemin, et la CI garde `--deny warnings`.
 - `runtime_shaders` : les shaders Metal compilent au lancement, il suffit des Command Line Tools.
 - Pas de hot reload avec GPUI : on relance.
