@@ -9,3 +9,5 @@ pub const ACCENT: u32 = 0xd4825d;
 pub const CLEAN: u32 = 0x86e89a;
 pub const DIRTY: u32 = 0xffdf61;
 pub const ERROR: u32 = 0xff7a7a;
+/// Something works, but less than it should: the list is not live. gwm calls this yellow "warning".
+pub const WARNING: u32 = 0xffdf61;

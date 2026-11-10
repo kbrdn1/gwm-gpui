@@ -4,7 +4,8 @@ paths:
 ---
 # Vues GPUI — conventions
 
-- Jamais d'appel bloquant dans `render` ni sur le thread UI : subprocess, I/O et socket passent par `cx.background_spawn`, puis `this.update(cx, …)` et `cx.notify()`. Modèle : `WorktreesView::new` dans `src/main.rs`.
+- Jamais d'appel bloquant dans `render` ni sur le thread UI : un subprocess ou une I/O ponctuels passent par `cx.background_spawn`, puis `this.update(cx, …)` et `cx.notify()`.
+- Un flux qui bloque toute la vie de l'app (`gwm_client::watch` sur le socket du daemon) a son propre thread et passe ses événements à la vue par un `async-channel` : sur l'exécuteur de fond, il immobiliserait un worker pour de bon. Modèle : `WorktreesView::new` dans `src/main.rs`.
 - `render` ne fait que lire l'état. Un changement d'état sans `cx.notify()` ne repeint rien, sans aucune erreur.
 - Une couleur vit dans `src/theme.rs`, jamais en hex dans une vue. Les tokens suivent le preset `claude-dark` de gwm-cli.
 - Un fichier par vue, découpé tôt. Monocode Native a laissé `shell.rs` monter à 13 437 lignes sur 197 507 : c'est le piège à éviter ici.

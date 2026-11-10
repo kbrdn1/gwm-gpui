@@ -1,5 +1,4 @@
 mod theme;
-mod worktrees;
 
 use std::path::PathBuf;
 
@@ -8,7 +7,10 @@ use gpui::{
   WindowOptions, actions, div, prelude::*, px, rgb, size,
 };
 
-use crate::worktrees::Worktree;
+use gwm_client::{
+  Worktree,
+  watch::{self, Event, Sockets, Source, Spawned},
+};
 
 actions!(gwm_gpui, [Quit]);
 
@@ -20,25 +22,50 @@ enum Listing {
 
 struct WorktreesView {
   listing: Listing,
+  /// Where the list comes from: shown, so a stale list never passes for live.
+  source: Option<Source>,
 }
 
 impl WorktreesView {
-  fn new(repo: PathBuf, cx: &mut Context<Self>) -> Self {
+  fn new(repo: PathBuf, spawned: Spawned, cx: &mut Context<Self>) -> Self {
+    let (events, received) = async_channel::unbounded();
+    // `watch` blocks on the daemon's socket for as long as the app runs. On the
+    // background executor it would hold a worker for good: it gets its own thread.
+    std::thread::spawn(move || {
+      watch::watch(&repo, Sockets::for_repo, &spawned, |event| {
+        events.send_blocking(event).is_ok()
+      });
+    });
     cx.spawn(async move |this, cx| {
-      let result = cx.background_spawn(async move { worktrees::list(&repo) }).await;
-      this
-        .update(cx, |view, cx| {
-          view.listing = match result {
-            Ok(worktrees) => Listing::Ready(worktrees),
-            Err(error) => Listing::Failed(error),
-          };
+      while let Ok(event) = received.recv().await {
+        let applied = this.update(cx, |view, cx| {
+          view.apply(event);
           cx.notify();
-        })
-        .ok();
+        });
+        if applied.is_err() {
+          break;
+        }
+      }
     })
     .detach();
     Self {
       listing: Listing::Loading,
+      source: None,
+    }
+  }
+
+  fn apply(&mut self, event: Event) {
+    match event {
+      Event::Snapshot(worktrees) => self.listing = Listing::Ready(worktrees),
+      Event::Source(source) => self.source = Some(source),
+      Event::Failed(error) => {
+        // Nothing follows a failure: a live or reconnecting line would lie. Why
+        // the list was not live, though, still holds.
+        if !matches!(self.source, Some(Source::Once(_))) {
+          self.source = None;
+        }
+        self.listing = Listing::Failed(error);
+      }
     }
   }
 }
@@ -58,11 +85,25 @@ impl Render for WorktreesView {
     div()
       .size_full()
       .p_4()
+      .flex()
+      .flex_col()
+      .gap_3()
       .bg(rgb(theme::BACKGROUND))
       .text_color(rgb(theme::TEXT))
       .text_sm()
+      .children(self.source.as_ref().map(source_line))
       .child(body)
   }
+}
+
+fn source_line(source: &Source) -> AnyElement {
+  let (text, color) = match source {
+    Source::Daemon(_) => ("live, from gwm daemon".to_owned(), theme::MUTED),
+    Source::OwnDaemon(_) => ("live, from a gwm daemon started by this app".to_owned(), theme::MUTED),
+    Source::Lost(reason) => (format!("reconnecting: {reason}"), theme::WARNING),
+    Source::Once(reason) => (format!("not live: {reason}"), theme::WARNING),
+  };
+  message(text.into(), color)
 }
 
 fn message(text: SharedString, color: u32) -> AnyElement {
@@ -95,6 +136,14 @@ fn main() {
     .map_or_else(|| PathBuf::from("."), PathBuf::from);
 
   Application::with_platform(gpui_platform::current_platform(false)).run(move |cx: &mut App| {
+    // A daemon this app started would outlive it: stop it on the way out.
+    let spawned = Spawned::default();
+    let on_quit = spawned.clone();
+    cx.on_app_quit(move |_| {
+      on_quit.stop();
+      async {}
+    })
+    .detach();
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
     cx.on_window_closed(|cx, _| {
@@ -114,9 +163,38 @@ fn main() {
         }),
         ..Default::default()
       },
-      |_window, cx| cx.new(|cx| WorktreesView::new(repo, cx)),
+      |_window, cx| cx.new(|cx| WorktreesView::new(repo, spawned, cx)),
     )
     .expect("the main window opens");
     cx.activate(true);
   });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn view(source: Source) -> WorktreesView {
+    WorktreesView {
+      listing: Listing::Loading,
+      source: Some(source),
+    }
+  }
+
+  #[test]
+  fn a_failure_takes_down_a_live_or_reconnecting_line() {
+    for source in [Source::Daemon("/d.sock".into()), Source::Lost("gone".into())] {
+      let mut view = view(source);
+      view.apply(Event::Failed("contract drift".to_owned()));
+      assert_eq!(view.source, None);
+      assert!(matches!(view.listing, Listing::Failed(_)));
+    }
+  }
+
+  #[test]
+  fn a_failure_keeps_why_the_list_is_not_live() {
+    let mut view = view(Source::Once("no daemon".into()));
+    view.apply(Event::Failed("gwm list failed".to_owned()));
+    assert_eq!(view.source, Some(Source::Once("no daemon".into())));
+  }
 }

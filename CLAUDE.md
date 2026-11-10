@@ -6,8 +6,8 @@ App desktop native pour [gwm](https://github.com/kbrdn1/gwm-cli), en Rust sur GP
 ⚠️ `export PATH="$HOME/.cargo/bin:$PATH"` d'abord : un rustc 1.89 du profil nix peut passer avant rustup, qui lui suit `rust-toolchain.toml` (1.99.1 ; `gpui-pre` 0.3.11 exige ≥ 1.98).
 
 - Build : `cargo build`
-- Test  : `cargo test`
-- Lint/Format : `cargo clippy --all-targets -- -D warnings` · `cargo fmt --all`
+- Test  : `cargo test` (l'app et `gwm-client`) · `cargo test -p gwm-client` (la couche gwm seule, en quelques secondes, sans compiler GPUI). Les tests de `gwm-client` pilotent un vrai `gwm daemon` : `gwm` doit être sur le `PATH`, sinon ils échouent (exprès, ils ne se sautent pas).
+- Lint/Format : `cargo clippy --workspace --all-targets -- -D warnings` · `cargo fmt --all`
 - Audit : `cargo audit --deny warnings` (lit `.cargo/audit.toml`)
 - Run   : `cargo run -- <chemin-du-repo>` (par défaut le dossier courant). `gwm` doit être sur le `PATH`.
 
@@ -15,7 +15,11 @@ Premier build long (GPUI compile tout) : `nice -n 10 cargo build -j 4` pour ne p
 
 ## Structure
 - `src/main.rs` : bootstrap de l'application GPUI et `WorktreesView`, la seule vue.
-- `src/worktrees.rs` : lecture du contrat gwm (`gwm list --format=json`), types et parsing testés.
+- `crates/gwm-client/` : tout ce qui parle à gwm, sans dépendance GPUI (workspace Cargo).
+  - `src/lib.rs` : types du contrat, `gwm list --format=json`, et `Repo::locate` (un seul `git rev-parse --show-toplevel --git-common-dir`).
+  - `src/daemon.rs` : le flux `subscribe` (contrôle de `schema_version`, handshake de 5 s) et le chemin du socket par défaut de gwm.
+  - `src/watch.rs` : la stratégie : daemon du socket par défaut s'il sert ce repo (toplevel **égal** à un de ses worktrees, jamais un préfixe : un sous-module n'est pas son parent), puis socket propre à l'app, puis `gwm daemon` lancé par l'app, puis un seul `gwm list`. Une sortie illisible du daemon d'un socket partagé passe au suivant ; sur le socket propre de l'app, c'est une dérive de contrat, affichée. Si git ne localise pas le repo (bare), un seul `gwm list` : c'est gwm qui juge ce qu'il sait lister.
+  - `tests/real_daemon.rs` : contre un vrai `gwm daemon` sur des repos jetables.
 - `src/theme.rs` : tokens de couleur, alignés sur le preset `claude-dark` de gwm-cli.
 - `.claude/rules/` : conventions path-scoped (`gpui-views.md`, `gwm-contract.md`).
 
@@ -45,6 +49,8 @@ Premier build long (GPUI compile tout) : `nice -n 10 cargo build -j 4` pour ne p
 ## Notes spécifiques
 - 🔴 **gwm reste la source de vérité** : aucune logique de worktree ici. Pas de dépendance Cargo sur `gwm-cli` : son `[lib]` est un point d'accès interne pour ses tests, hors SemVer. Lectures par le JSON gelé (`docs/schema/` de gwm-cli) ou le daemon JSON-RPC, écritures par un subprocess `gwm`. Détail : `.claude/rules/gwm-contract.md`.
 - Une fonctionnalité qui demande un changement de contrat se fait d'abord dans gwm-cli.
+- Daemon : gwm le documente comme lancé par l'utilisateur, un par repo, sur un socket par défaut partagé. L'app le lance quand même s'il manque, sinon la liste ne serait pas live, sur `<base>/gwm-gpui-<fnv1a du common dir git>.sock`, `<base>` étant celle du socket par défaut de gwm (`$XDG_RUNTIME_DIR`, sinon `$TMPDIR`) : un par repo, quel que soit le worktree ouvert, et l'arrête au `on_app_quit`. Tuée au lieu de quittée, elle laisse le daemon tourner : le lancement suivant le réutilise sans le posséder, il tourne jusqu'à un arrêt à la main. Le daemon ne passe pas par le trust ledger de `.gwm.toml` : pas de `--allow-bootstrap`.
+- Manques du contrat, remontés et non contournés dans gwm-cli : aucune méthode ne nomme le repo d'un daemon (on compare les chemins du premier snapshot), aucune commande ne donne le socket par défaut résolu (la résolution est recopiée dans `daemon.rs`), `subscribe` n'a pas de réponse, le premier snapshot en tient lieu, et le flux n'a pas de heartbeat : un daemon suspendu (Ctrl-Z) ou dont les scans échouent en boucle garde la connexion ouverte sans rien envoyer, et la liste reste affichée « live » alors qu'elle est figée.
 - `gpui-pre` vient de crates.io, **non modifié** : pas de flou d'arrière-plan ni de fondus comme Monocode Native, qui maintient une copie patchée de GPUI dans `vendor/`. Monocode est sous MIT : copier du code impose son attribution dans `NOTICE`.
 - `.cargo/audit.toml` ignore 6 advisories `unmaintained` (aucune vulnérabilité), toutes transitives via GPUI : les sortir du graphe demanderait de forker GPUI. **À réexaminer à chaque bump de `gpui-pre`** : `cargo tree -i <crate> --target all -e normal,build` par ID, et retirer ceux qui ne sortent plus. Jamais d'ID ajouté sans sa raison et son chemin, et la CI garde `--deny warnings`.
 - `runtime_shaders` : les shaders Metal compilent au lancement, il suffit des Command Line Tools.
