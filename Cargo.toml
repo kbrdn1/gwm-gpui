@@ -17,12 +17,27 @@ default-members = [".", "crates/gwm-client"]
 # Hands the events of `gwm_client::watch`, which blocks on its own thread, to the UI.
 async-channel = "2"
 gwm-client = { path = "crates/gwm-client" }
+# `localtime_r`, to group the sidebar by local calendar day.
+libc = "0.2"
 # GPUI through the gpui-pre snapshots of Zed (Apache-2.0). Pinned exactly: a 0.x
 # snapshot can break between patch versions, and the two crates move together.
 gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
 # `runtime_shaders` compiles the Metal shaders at launch, so a build needs the
 # Command Line Tools and not a full Xcode.
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false, features = ["font-kit", "runtime_shaders"] }
+
+[dev-dependencies]
+# The view tests build worktrees from gwm's JSON, as gwm sends them.
+serde_json = "1"
+
+# Off-screen rendering (`Window::render_to_image`) for examples/screenshot.rs.
+# Never in the app: it pulls GPUI's test support, and a second build of GPUI.
+[features]
+screenshot = ["gpui/test-support", "gpui_platform/test-support"]
+
+[[example]]
+name = "screenshot"
+required-features = ["screenshot"]
 
 # GPUI crawls when its dependencies are unoptimised, and their debug info
 # dominates the link. Our own crate stays at opt-level 0 for fast rebuilds.

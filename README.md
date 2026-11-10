@@ -3,7 +3,7 @@
 A native desktop app for [gwm](https://github.com/kbrdn1/gwm-cli), the git worktree manager, built on [GPUI](https://www.gpui.rs).
 
 > [!NOTE]
-> Early scaffold, macOS only. Today it opens a window and lists the worktrees of a repo, kept live through gwm's daemon, nothing more.
+> Early, macOS only. A glass window, after [Monocode Native](https://github.com/hardbeat920/monocode)'s, that shows the worktrees of a repo, kept live through gwm's daemon: a sidebar of worktrees grouped by branch age, and the selected one's details. Read only for now.
 
 ## Requirements
 
@@ -18,6 +18,8 @@ cargo run -- /path/to/a/repo   # defaults to the current directory
 ```
 
 The first build compiles GPUI and takes several minutes.
+
+Up and down move the selection; a click selects a worktree. The title bar's sidebar button hides the sidebar.
 
 ## How it talks to gwm
 
@@ -38,7 +40,7 @@ A `gwm daemon` serves one repo, and its default socket is shared by every repo. 
 3. else starts `gwm daemon` on that socket, and stops it when the app quits;
 4. else, or when git cannot locate the repo (a bare one), lists the worktrees once with `gwm list --format=json`.
 
-A line above the list says which: live, reconnecting after a lost stream, or not live and why. If the app is killed instead of quit, the daemon it started keeps running: the next launch uses it, but does not own it, so it runs until you stop it.
+The status bar says which: live, reconnecting after a lost stream, or not live and why. If the app is killed instead of quit, the daemon it started keeps running: the next launch uses it, but does not own it, so it runs until you stop it.
 
 It does not link the `gwm-cli` crate: its `[lib]` target is an internal test seam, [not covered by SemVer](https://github.com/kbrdn1/gwm-cli/blob/main/docs/6.development/3.stability.md).
 

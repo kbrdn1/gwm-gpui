@@ -4,5 +4,24 @@ Apache-2.0. Copyright Zed Industries, Inc.
 Source: https://github.com/zed-industries/zed
 License: https://www.apache.org/licenses/LICENSE-2.0
 
-The stack was chosen after studying Monocode Native
-(https://github.com/hardbeat920/monocode, MIT). No Monocode code is included.
+The look follows Monocode Native (https://github.com/hardbeat920/monocode),
+Copyright (c) 2026 Nick, licensed under MIT (full text in
+assets/icons/LICENSE-MONOCODE):
+- src/theme.rs takes its dark theme's surfaces, opacities, radii and sizes
+  (crates/monocode-gpui/src/theme.rs, shell/layout.rs);
+- src/lib.rs takes its window options: glass background, transparent title
+  bar, traffic light position, minimum size (crates/monocode-gpui/src/main.rs);
+- src/title_bar.rs takes its title bar and tab plate, and its tile's rim
+  (theme.rs title_tab_plate, tab_tile.rs);
+- src/sidebar.rs takes its section label and its detailed session row
+  metrics (theme.rs section_label, shell.rs, shell/sidebar_list.rs);
+- src/age.rs reimplements its relative time format and day buckets
+  (crates/monocode-core/src/time.rs, shell/sidebar_list.rs);
+- src/workspace.rs lays out its rounded-card frame, and paints the card's
+  corners as its off-macOS fallback does (shell/layout.rs).
+
+The icons in assets/icons/ are Monocode's copies of Hugeicons Stroke Rounded
+(@hugeicons/core-free-icons 4.3.0), Copyright (c) Hugeicons, licensed under
+MIT: assets/icons/LICENSE-HUGEICONS. Monocode's copies are themselves under its
+MIT license: assets/icons/LICENSE-MONOCODE.
+Source: https://github.com/hugeicons/hugeicons

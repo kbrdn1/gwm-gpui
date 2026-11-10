@@ -6,8 +6,9 @@
 cargo run -- /path/to/a/repo      # launch the app
 cargo test                        # tests, the app and gwm-client
 cargo test -p gwm-client          # the gwm layer alone, without building GPUI
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings   # --all-features: the screenshot example too
 cargo fmt --all
+cargo run --example screenshot --features screenshot -- <repo> <out.png>   # render the window off screen
 ```
 
 `gwm-client`'s tests drive a real `gwm daemon` on throwaway repos: they need `gwm` on your `PATH`, and fail without it.

@@ -311,9 +311,23 @@ mod tests {
   fn at(path: &str) -> Worktree {
     Worktree {
       name: "wt".to_owned(),
+      id: "wt".to_owned(),
       path: PathBuf::from(path),
       branch: None,
-      status: crate::Status { is_dirty: false },
+      head: None,
+      is_main: false,
+      is_locked: false,
+      is_prunable: false,
+      status: crate::Status {
+        is_dirty: false,
+        has_upstream: false,
+        ahead: 0,
+        behind: 0,
+        unknown: false,
+      },
+      age_seconds: None,
+      issue: None,
+      pr: None,
     }
   }
 
