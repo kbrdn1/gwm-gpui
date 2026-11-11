@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use gpui::{App, Application, Focusable, KeyBinding, actions, prelude::*};
-use gwm_client::watch::Spawned;
+use gpui::{App, Application, Focusable, KeyBinding, PathPromptOptions, actions, prelude::*};
+use gwm_client::{Repo, watch::Spawned};
 use gwm_gpui::{Workspace, assets::Assets, login_shell};
 
 actions!(gwm_gpui, [Quit]);
@@ -20,10 +20,16 @@ fn main() {
     }
   }
 
-  // The repo to list: the first argument, else wherever the app was launched.
+  // The repo to list: the first argument (an old macOS adds `-psn_…` to a
+  // Finder launch, not a path), else the current directory if it is in one.
+  // The Finder starts the app in `/`: then the user picks a folder. A given
+  // argument is not checked: a bare repo is no work tree for git, but gwm
+  // lists it, and the window says why when nothing can be listed.
   let repo = std::env::args_os()
-    .nth(1)
-    .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    .skip(1)
+    .find(|arg| !arg.to_string_lossy().starts_with("-psn_"))
+    .map(PathBuf::from)
+    .or_else(|| Repo::locate(".".as_ref()).is_ok().then(|| PathBuf::from(".")));
 
   Application::with_platform(gpui_platform::current_platform(false))
     .with_assets(Assets)
@@ -46,12 +52,43 @@ fn main() {
       })
       .detach();
 
-      cx.open_window(gwm_gpui::window_options(cx), |window, cx| {
-        let workspace = cx.new(|cx| Workspace::new(repo, spawned, cx));
-        window.focus(&workspace.focus_handle(cx), cx);
-        workspace
-      })
-      .expect("the main window opens");
+      if let Some(repo) = repo {
+        open(repo, spawned, cx);
+        return;
+      }
+      // In front, or the panel opens behind the app that launched this one.
       cx.activate(true);
+      // A folder that is no repo still opens: the window says what git and
+      // gwm make of it, which an alert could only repeat.
+      let picked = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some("Open".into()),
+      });
+      cx.spawn(async move |cx| {
+        let repo = picked
+          .await
+          .ok()
+          .and_then(Result::ok)
+          .flatten()
+          .and_then(|paths| paths.into_iter().next());
+        cx.update(|cx| match repo {
+          Some(repo) => open(repo, spawned, cx),
+          // Cancelled: there is nothing to show.
+          None => cx.quit(),
+        });
+      })
+      .detach();
     });
+}
+
+fn open(repo: PathBuf, spawned: Spawned, cx: &mut App) {
+  cx.open_window(gwm_gpui::window_options(cx), |window, cx| {
+    let workspace = cx.new(|cx| Workspace::new(repo, spawned, cx));
+    window.focus(&workspace.focus_handle(cx), cx);
+    workspace
+  })
+  .expect("the main window opens");
+  cx.activate(true);
 }
