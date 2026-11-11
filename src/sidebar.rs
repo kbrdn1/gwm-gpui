@@ -171,7 +171,7 @@ fn row(worktree: &Worktree, selected: bool, age: Option<String>, cx: &mut Contex
         row.hover(|row| row.bg(theme::hover()))
       }
     })
-    .on_click(cx.listener(move |workspace, _, _, cx| workspace.select(path.clone(), cx)))
+    .on_click(cx.listener(move |workspace, _, window, cx| workspace.select(path.clone(), window, cx)))
     .child(icon(
       assets::BRANCH,
       16.,

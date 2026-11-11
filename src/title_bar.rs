@@ -14,7 +14,8 @@ use crate::{
 };
 
 /// Monocode's title bar, sidebar closed: lights, then three 24 px buttons.
-/// gwm-gpui has one button, the space of the two others stays drag area.
+/// gwm-gpui has two, the sidebar toggle and "New worktree": the space of the
+/// third stays drag area.
 const CLOSED_NAV_WIDTH: Pixels = px(150.);
 
 pub(crate) fn title_bar(
@@ -52,6 +53,21 @@ pub(crate) fn title_bar(
             .hover(|button| button.bg(theme::selected()))
             .on_click(cx.listener(|workspace, _, _, cx| workspace.toggle_sidebar(cx)))
             .child(icon(assets::SIDEBAR, 14., theme::ink(0.5))),
+        )
+        .child(
+          div()
+            .id("new-worktree")
+            .size(px(24.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .hover(|button| button.bg(theme::selected()))
+            .text_size(px(17.))
+            .text_color(theme::ink(0.5))
+            .on_click(cx.listener(|workspace, _, window, cx| workspace.toggle_form(window, cx)))
+            .child("+"),
         )
         .child(drag_area().flex_1()),
     )
