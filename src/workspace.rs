@@ -5,17 +5,30 @@
 use std::{path::PathBuf, time::Duration};
 
 use gpui::{
-  App, Context, FocusHandle, Focusable, PathBuilder, Pixels, ScrollHandle, SharedString, Window, actions, canvas, div,
-  point, prelude::*, px,
+  App, Context, FocusHandle, Focusable, MouseButton, PathBuilder, Pixels, PromptLevel, ScrollHandle, SharedString,
+  Window, actions, canvas, div, point, prelude::*, px,
 };
 use gwm_client::{
   Worktree,
   watch::{self, Event, Sockets, Source, Spawned},
 };
 
-use crate::{age, detail, sidebar, status_bar, theme, title_bar};
+use crate::{
+  age,
+  apps::{self, Installed},
+  detail, sidebar, status_bar, theme, title_bar,
+};
 
 actions!(workspace, [SelectNext, SelectPrevious]);
+
+/// What came of the last action on a worktree, shown in its card.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Activity {
+  /// `gwm remove` runs, or has run and the list does not show it yet.
+  Removing,
+  /// The action failed: gwm's or `open`'s own words.
+  Failed(String),
+}
 
 pub(crate) enum Listing {
   Loading,
@@ -34,6 +47,8 @@ pub(crate) struct State {
   pub selected: Option<PathBuf>,
   /// When the shown snapshot arrived: its ages count from there.
   pub received_at: i64,
+  /// The last action's outcome, on the worktree at that path.
+  pub activity: Option<(PathBuf, Activity)>,
 }
 
 impl State {
@@ -43,12 +58,19 @@ impl State {
       source,
       selected: None,
       received_at: age::now(),
+      activity: None,
     }
   }
 
   fn apply(&mut self, event: Event) {
     match event {
       Event::Snapshot(worktrees) => {
+        // A removal ends with the first list without its worktree.
+        if let Some((path, _)) = &self.activity
+          && !worktrees.iter().any(|worktree| &worktree.path == path)
+        {
+          self.activity = None;
+        }
         self.listing = Listing::Ready(worktrees);
         self.received_at = age::now();
       }
@@ -95,6 +117,13 @@ impl State {
     self.selected = Some(worktrees[order[position]].path.clone());
   }
 
+  pub fn activity(&self, path: &std::path::Path) -> Option<&Activity> {
+    self
+      .activity
+      .as_ref()
+      .and_then(|(on, activity)| (on == path).then_some(activity))
+  }
+
   fn position(&self, order: &[usize]) -> Option<usize> {
     let selected = self.selected.as_deref()?;
     order.iter().position(|&index| self.worktrees()[index].path == selected)
@@ -127,9 +156,43 @@ pub(crate) fn order(worktrees: &[Worktree]) -> Vec<usize> {
   order
 }
 
+/// The native alert before a removal: its level, message and detail. It says
+/// what gwm will drop and what it keeps.
+pub(crate) fn removal_prompt(worktree: &Worktree) -> (PromptLevel, String, String) {
+  let status = &worktree.status;
+  let changes = if status.unknown {
+    "gwm cannot tell whether it has uncommitted changes: any it has will be lost, and gwm undo does not bring \
+     them back."
+  } else if status.is_dirty {
+    "It has uncommitted changes: they will be lost, untracked files included, and gwm undo does not bring them \
+     back."
+  } else {
+    "It has no uncommitted changes."
+  };
+  let branch = worktree.branch.as_ref().map_or_else(
+    || "It is on a detached HEAD: no branch to keep.".to_owned(),
+    |branch| format!("Its branch, {branch}, is kept."),
+  );
+  let level = if status.is_dirty || status.unknown {
+    PromptLevel::Critical
+  } else {
+    PromptLevel::Warning
+  };
+  (
+    level,
+    format!("Remove {}?", worktree.name),
+    format!("{changes}\n\n{branch}\n\n{}", worktree.path.display()),
+  )
+}
+
 pub struct Workspace {
   pub(crate) state: State,
   pub(crate) sidebar_open: bool,
+  /// Where the app was opened: gwm runs there.
+  repo: PathBuf,
+  /// The editors and terminals found, `None` while they are looked for.
+  apps: Option<Vec<Installed>>,
+  menu_open: bool,
   sidebar_scroll: ScrollHandle,
   focus: FocusHandle,
 }
@@ -139,10 +202,11 @@ impl Workspace {
   /// kept in `spawned`, for the app to stop on quit.
   pub fn new(repo: PathBuf, spawned: Spawned, cx: &mut Context<Self>) -> Self {
     let (events, received) = async_channel::unbounded();
+    let watched = repo.clone();
     // `watch` blocks on the daemon's socket for as long as the app runs. On the
     // background executor it would hold a worker for good: it gets its own thread.
     std::thread::spawn(move || {
-      watch::watch(&repo, Sockets::for_repo, &spawned, |event| {
+      watch::watch(&watched, Sockets::for_repo, &spawned, |event| {
         events.send_blocking(event).is_ok()
       });
     });
@@ -158,15 +222,23 @@ impl Workspace {
       }
     })
     .detach();
-    Self::with_state(State::new(Listing::Loading, None), cx)
+    Self::with_state(repo, State::new(Listing::Loading, None), cx)
   }
 
-  /// Shows `worktrees` as they are, without following gwm: the screenshot example.
-  pub fn showing(worktrees: Vec<Worktree>, source: Source, cx: &mut Context<Self>) -> Self {
-    Self::with_state(State::new(Listing::Ready(worktrees), Some(source)), cx)
+  /// Shows `worktrees`, listed in `repo`, without following gwm: the screenshot example.
+  pub fn showing(repo: PathBuf, worktrees: Vec<Worktree>, source: Source, cx: &mut Context<Self>) -> Self {
+    Self::with_state(repo, State::new(Listing::Ready(worktrees), Some(source)), cx)
   }
 
-  fn with_state(state: State, cx: &mut Context<Self>) -> Self {
+  fn with_state(repo: PathBuf, state: State, cx: &mut Context<Self>) -> Self {
+    cx.spawn(async move |this, cx| {
+      let found = cx.background_spawn(async { apps::installed(&apps::roots()) }).await;
+      let _ = this.update(cx, |workspace, cx| {
+        workspace.apps = Some(found);
+        cx.notify();
+      });
+    })
+    .detach();
     // Ages are worded to the minute ("25m"): repaint once a minute, or they
     // would only move with the next snapshot.
     cx.spawn(async move |this, cx| {
@@ -181,6 +253,9 @@ impl Workspace {
     Self {
       state,
       sidebar_open: true,
+      repo,
+      apps: None,
+      menu_open: false,
       sidebar_scroll: ScrollHandle::new(),
       focus: cx.focus_handle(),
     }
@@ -221,6 +296,77 @@ impl Workspace {
     cx.notify();
   }
 
+  pub(crate) fn toggle_menu(&mut self, cx: &mut Context<Self>) {
+    self.menu_open = !self.menu_open;
+    cx.notify();
+  }
+
+  /// Opens `dir` in the app at `bundle`, off the UI thread.
+  pub(crate) fn open_in(&mut self, bundle: PathBuf, dir: PathBuf, cx: &mut Context<Self>) {
+    self.menu_open = false;
+    self.state.activity = None;
+    cx.notify();
+    cx.spawn(async move |this, cx| {
+      let opened = cx
+        .background_spawn({
+          let dir = dir.clone();
+          async move { apps::open(&bundle, &dir) }
+        })
+        .await;
+      if let Err(error) = opened {
+        let _ = this.update(cx, |workspace, cx| {
+          workspace.state.activity = Some((dir, Activity::Failed(error)));
+          cx.notify();
+        });
+      }
+    })
+    .detach();
+  }
+
+  /// Asks, then removes the selected worktree through gwm, off the UI thread.
+  /// Live, the daemon's next snapshot drops it; not live, a new `gwm list` does.
+  pub(crate) fn confirm_remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(worktree) = self.state.selected() else {
+      return;
+    };
+    let (level, message, detail) = removal_prompt(worktree);
+    let answer = window.prompt(level, &message, Some(&detail), &["Remove", "Cancel"], cx);
+    let (repo, path) = (self.repo.clone(), worktree.path.clone());
+    cx.spawn(async move |this, cx| {
+      if answer.await != Ok(0) {
+        return;
+      }
+      // Asked now, not before the alert, which may have stayed open a while.
+      let Ok(relist) = this.update(cx, |workspace, cx| {
+        workspace.state.activity = Some((path.clone(), Activity::Removing));
+        cx.notify();
+        matches!(workspace.state.source, Some(Source::Once(_)))
+      }) else {
+        return;
+      };
+      let (removed, listed) = cx
+        .background_spawn({
+          let path = path.clone();
+          async move {
+            let removed = gwm_client::remove(&repo, &path);
+            let listed = (removed.is_ok() && relist).then(|| gwm_client::list(&repo));
+            (removed, listed)
+          }
+        })
+        .await;
+      let _ = this.update(cx, |workspace, cx| {
+        match (removed, listed) {
+          (Err(error), _) => workspace.state.activity = Some((path, Activity::Failed(error))),
+          (Ok(()), Some(Ok(worktrees))) => workspace.state.apply(Event::Snapshot(worktrees)),
+          (Ok(()), Some(Err(error))) => workspace.state.apply(Event::Failed(error)),
+          (Ok(()), None) => {}
+        }
+        cx.notify();
+      });
+    })
+    .detach();
+  }
+
   fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
     self.state.step(delta);
     self.reveal_selection();
@@ -242,7 +388,13 @@ impl Render for Workspace {
       Listing::Loading => message("Loading worktrees…", theme::ink(0.5)).into_any_element(),
       Listing::Failed(error) => message(error, theme::color(theme::ERROR)).into_any_element(),
       Listing::Ready(_) => match selected {
-        Some(worktree) => detail::detail(worktree, ages).into_any_element(),
+        Some(worktree) => {
+          let actions = detail::Actions {
+            activity: self.state.activity(&worktree.path),
+            menu: self.menu_open.then_some(self.apps.as_deref()),
+          };
+          detail::detail(worktree, ages, actions, cx).into_any_element()
+        }
         None => message("No worktrees", theme::ink(0.5)).into_any_element(),
       },
     };
@@ -254,6 +406,7 @@ impl Render for Workspace {
       .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.step(1, cx)))
       .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.step(-1, cx)))
       .size_full()
+      .relative()
       .flex()
       .flex_col()
       .bg(theme::shell())
@@ -314,6 +467,23 @@ impl Render for Workspace {
               .child(status_bar::status_bar(self.state.source.as_ref(), count)),
           ),
       )
+      // While the popover is open, a press anywhere else closes it and does
+      // nothing more: not even the "Open in…" button reopening it.
+      .when(self.menu_open, |root| {
+        root.child(
+          div()
+            .id("dismiss-menu")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .occlude()
+            .on_mouse_down(
+              MouseButton::Left,
+              cx.listener(|workspace, _, _, cx| workspace.toggle_menu(cx)),
+            ),
+        )
+      })
   }
 }
 
@@ -464,6 +634,36 @@ pub(crate) mod tests {
       assert_eq!(state.source, None);
       assert!(matches!(state.listing, Listing::Failed(_)));
     }
+  }
+
+  #[test]
+  fn a_removal_shows_until_the_first_list_without_its_worktree() {
+    let mut state = state(None);
+    state.activity = Some((PathBuf::from("/fix-57"), Activity::Removing));
+    state.apply(Event::Snapshot(demo()));
+    assert_eq!(state.activity(Path::new("/fix-57")), Some(&Activity::Removing));
+    assert_eq!(state.activity(Path::new("/docs-71")), None);
+    state.apply(Event::Snapshot(vec![worktree("acme-api", true, None)]));
+    assert_eq!(state.activity, None);
+  }
+
+  #[test]
+  fn the_removal_prompt_says_what_is_lost_and_what_is_kept() {
+    let mut fix = worktree("fix-57", false, Some(60));
+    fix.branch = Some("fix/#57-rate-limit-headers".to_owned());
+    let (level, message, detail) = removal_prompt(&fix);
+    assert_eq!((level, message.as_str()), (PromptLevel::Warning, "Remove fix-57?"));
+    assert!(detail.contains("no uncommitted changes"), "{detail}");
+    assert!(
+      detail.contains("Its branch, fix/#57-rate-limit-headers, is kept."),
+      "{detail}"
+    );
+
+    fix.status.is_dirty = true;
+    let (level, _, detail) = removal_prompt(&fix);
+    assert_eq!(level, PromptLevel::Critical);
+    assert!(detail.contains("uncommitted changes: they will be lost"), "{detail}");
+    assert!(detail.contains("gwm undo does not bring them back"), "{detail}");
   }
 
   #[test]

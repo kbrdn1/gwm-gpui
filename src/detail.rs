@@ -1,16 +1,37 @@
 //! The central card: the selected worktree, from the contract's fields and
-//! nothing else. Its changed files are not here: `gwm status --json` carries
-//! `branch`, `issue` and `pr`, no file list.
+//! nothing else, and what can be done to it: open it in an app, remove it.
+//! Its changed files are not here: `gwm status --json` carries `branch`,
+//! `issue` and `pr`, no file list.
 
-use gpui::{FontWeight, Hsla, SharedString, div, prelude::*, px};
+use gpui::{Context, FontWeight, Hsla, SharedString, div, prelude::*, px};
 use gwm_client::Worktree;
 
-use crate::{age::Ages, sidebar::one_line, theme, title_bar::tile};
+use crate::{
+  age::Ages,
+  apps::Installed,
+  open_menu::open_menu,
+  sidebar::one_line,
+  theme,
+  title_bar::tile,
+  workspace::{Activity, Workspace},
+};
+
+/// What the card needs beyond the worktree: what is under way on it, and the
+/// "Open in…" popover, `Some` while open, holding the apps found so far.
+pub(crate) struct Actions<'a> {
+  pub activity: Option<&'a Activity>,
+  pub menu: Option<Option<&'a [Installed]>>,
+}
 
 /// How much of the HEAD oid to show, as `git log --oneline` would.
 const SHORT_OID: usize = 12;
 
-pub(crate) fn detail(worktree: &Worktree, ages: Ages) -> impl IntoElement {
+pub(crate) fn detail(
+  worktree: &Worktree,
+  ages: Ages,
+  actions: Actions,
+  cx: &mut Context<Workspace>,
+) -> impl IntoElement {
   let status = &worktree.status;
   let working_tree = if status.unknown {
     ("unknown", theme::ink(0.5))
@@ -67,6 +88,7 @@ pub(crate) fn detail(worktree: &Worktree, ages: Ages) -> impl IntoElement {
             ),
         ),
     )
+    .child(action_row(worktree, actions, cx))
     .child(
       div()
         .flex()
@@ -91,6 +113,81 @@ pub(crate) fn detail(worktree: &Worktree, ages: Ages) -> impl IntoElement {
           facts.child(fact("Flags", text(&flags.join(", "), theme::ink(0.9))))
         }),
     )
+}
+
+/// "Open in…" and "Remove…", then what came of the last action: gwm's or
+/// `open`'s own words when it failed.
+fn action_row(worktree: &Worktree, actions: Actions, cx: &mut Context<Workspace>) -> impl IntoElement {
+  let removing = matches!(actions.activity, Some(Activity::Removing));
+  let failed = match actions.activity {
+    Some(Activity::Failed(error)) => Some(error.clone()),
+    _ => None,
+  };
+  div()
+    .flex()
+    .flex_col()
+    .gap(px(10.))
+    .child(
+      div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(
+          div()
+            .relative()
+            .child(
+              button("open-in", "Open in…", theme::ink(0.9))
+                .on_click(cx.listener(|workspace, _, _, cx| workspace.toggle_menu(cx))),
+            )
+            .children(actions.menu.map(|apps| {
+              div()
+                .absolute()
+                .top(px(32.))
+                .left_0()
+                .child(open_menu(apps, &worktree.path, cx))
+            })),
+        )
+        // gwm does not remove the main worktree: no button that would only refuse.
+        .when(!worktree.is_main, |row| {
+          if removing {
+            // Under way: a state, not a button.
+            row.child(pill("Removing…", theme::ink(0.45)))
+          } else {
+            row.child(
+              button("remove", "Remove…", theme::color(theme::ERROR))
+                .on_click(cx.listener(|workspace, _, window, cx| workspace.confirm_remove(window, cx))),
+            )
+          }
+        }),
+    )
+    .children(failed.map(|error| {
+      div()
+        .text_size(px(12.))
+        .text_color(theme::color(theme::ERROR))
+        .child(error)
+    }))
+}
+
+fn button(id: &'static str, label: &'static str, color: Hsla) -> gpui::Stateful<gpui::Div> {
+  pill(label, color)
+    .id(id)
+    .cursor_pointer()
+    .hover(|button| button.bg(theme::selected()))
+}
+
+fn pill(label: &'static str, color: Hsla) -> gpui::Div {
+  div()
+    .h(px(28.))
+    .px(px(10.))
+    .flex()
+    .items_center()
+    .rounded(px(6.))
+    .bg(theme::hover())
+    .border_1()
+    .border_color(theme::card_border())
+    .text_size(px(12.))
+    .text_color(color)
+    .child(label)
 }
 
 fn number(value: Option<u64>) -> String {

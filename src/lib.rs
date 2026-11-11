@@ -2,8 +2,10 @@
 //! screenshot example.
 
 mod age;
+mod apps;
 pub mod assets;
 mod detail;
+mod open_menu;
 mod sidebar;
 mod status_bar;
 pub mod theme;
