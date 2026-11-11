@@ -93,6 +93,14 @@ fn link_key(worktree: &Worktree) -> LinkKey {
   (worktree.branch.clone(), worktree.issue, worktree.pr)
 }
 
+/// Whether an answer asked for `asked` still holds for a list showing `now`.
+/// gwm saves the PR it detects, so the next list may show the answer's own
+/// PR: that is the answer coming back, not a new link to ask about.
+fn still(asked: &LinkKey, answer: &Result<Links, String>, now: &LinkKey) -> bool {
+  let answered = answer.as_ref().ok().map(|links| links.pr.as_ref().map(|pr| pr.number));
+  asked.0 == now.0 && asked.1 == now.1 && (asked.2 == now.2 || answered == Some(now.2))
+}
+
 impl State {
   fn new(listing: Listing, source: Option<Source>) -> Self {
     Self {
@@ -308,7 +316,10 @@ impl State {
     let (path, key) = (worktree.path.clone(), link_key(worktree));
     let selected_now = self.links_seen.as_ref() != Some(&path);
     self.links_seen = Some(path.clone());
-    let known = self.links.get(&path).is_some_and(|(known, _)| *known == key);
+    let known = self
+      .links
+      .get(&path)
+      .is_some_and(|(known, result)| still(known, result, &key));
     if known && !selected_now {
       return None;
     }
@@ -333,7 +344,7 @@ impl State {
   /// the link fields the list shows now.
   pub fn links(&self, worktree: &Worktree) -> Option<&Result<Links, String>> {
     let (known, result) = self.links.get(&worktree.path)?;
-    (*known == link_key(worktree)).then_some(result)
+    still(known, result, &link_key(worktree)).then_some(result)
   }
 
   fn position(&self, order: &[usize]) -> Option<usize> {
@@ -1283,6 +1294,20 @@ pub(crate) mod tests {
     // Back to a worktree already fetched: its CI may have finished since.
     state.step(-1);
     assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+  }
+
+  /// `gwm status` saves the PR it detects, and the next list shows it: that
+  /// is its own answer coming back, not a new link to ask about.
+  #[test]
+  fn the_pr_gwm_status_detected_does_not_ask_again() {
+    let mut state = state(None);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+    state.end_links(with_pr(706));
+    let mut listed = demo();
+    listed[0].pr = Some(706);
+    state.apply(Event::Snapshot(listed));
+    assert_eq!(state.links(state.selected().unwrap()), Some(&with_pr(706)));
+    assert_eq!(state.begin_links(), None);
   }
 
   /// Coming back to a worktree asks gwm again, and shows what it said last
