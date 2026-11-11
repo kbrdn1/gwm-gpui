@@ -14,6 +14,9 @@ pub const DIRTY: u32 = 0xffdf61;
 /// Something works, but less than it should: the list is not live. gwm calls this yellow "warning".
 pub const WARNING: u32 = 0xffdf61;
 pub const ERROR: u32 = 0xff7a7a;
+/// Settled without failing: a merged PR, a closed issue. gwm's "locked"
+/// purple, which `pr_badge_color` and `issue_badge_color` give them.
+pub const SETTLED: u32 = 0xc79bff;
 
 /// Monocode's ink: every text, icon, wash and hairline is this colour at some alpha.
 const INK: u32 = 0xebebeb;
