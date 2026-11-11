@@ -8,6 +8,7 @@ mod create_form;
 mod detail;
 pub mod login_shell;
 mod open_menu;
+pub mod recent;
 mod sidebar;
 mod status_bar;
 mod text_input;
