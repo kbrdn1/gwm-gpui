@@ -1,10 +1,14 @@
-use std::path::PathBuf;
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
-use gpui::{App, Application, Focusable, KeyBinding, PathPromptOptions, actions, prelude::*};
+use gpui::{App, Application, Focusable, KeyBinding, Menu, MenuItem, PathPromptOptions, actions, prelude::*};
 use gwm_client::{Repo, watch::Spawned};
 use gwm_gpui::{Workspace, assets::Assets, login_shell};
 
-actions!(gwm_gpui, [Quit]);
+actions!(gwm_gpui, [Quit, OpenFolder]);
+
+/// The daemons the app started, one holder per window: a window that starts
+/// one must not stop another's. All are stopped on quit.
+type Daemons = Rc<RefCell<Vec<Spawned>>>;
 
 fn main() {
   // The Finder launches the app with launchd's PATH, where `gwm` is not: take
@@ -32,17 +36,27 @@ fn main() {
   Application::with_platform(gpui_platform::current_platform(false))
     .with_assets(Assets)
     .run(move |cx: &mut App| {
-      // A daemon this app started would outlive it: stop it on the way out.
-      let spawned = Spawned::default();
-      let on_quit = spawned.clone();
+      // A daemon this app started would outlive it: stop them on the way out.
+      let daemons = Daemons::default();
+      let on_quit = daemons.clone();
       cx.on_app_quit(move |_| {
-        on_quit.stop();
+        on_quit.borrow().iter().for_each(Spawned::stop);
         async {}
       })
       .detach();
-      cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+      cx.bind_keys([
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-o", OpenFolder, None),
+      ]);
       gwm_gpui::bind_keys(cx);
       cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
+      // The way out of a window on the wrong folder, and into another repo.
+      let to_pick = daemons.clone();
+      cx.on_action(move |_: &OpenFolder, cx: &mut App| pick(to_pick.clone(), cx));
+      cx.set_menus([
+        Menu::new("gwm").items([MenuItem::action("Quit gwm", Quit)]),
+        Menu::new("File").items([MenuItem::action("Open…", OpenFolder)]),
+      ]);
       cx.on_window_closed(|cx, _| {
         if cx.windows().is_empty() {
           cx.quit();
@@ -51,25 +65,23 @@ fn main() {
       .detach();
 
       if let Some(repo) = repo {
-        open(repo, spawned, cx);
+        open(repo, &daemons, cx);
         return;
       }
       // In front, or the panel opens behind the app that launched this one.
       cx.activate(true);
-      pick(spawned, cx);
+      pick(daemons, cx);
     });
 }
 
-/// Asks for a folder until one is in a git repo, or the user cancels. A folder
-/// outside any repo opens the picker again: a window on it would only show
-/// an error, with no way to pick another. A bare repo is refused here too, as
-/// git sees no work tree in it: pass it as an argument instead.
-fn pick(spawned: Spawned, cx: &mut App) {
+/// Asks for a folder and opens it. One that is in no repo opens too: the
+/// window shows what git and gwm make of it, and File > Open… picks another.
+fn pick(daemons: Daemons, cx: &mut App) {
   let picked = cx.prompt_for_paths(PathPromptOptions {
     files: false,
     directories: true,
     multiple: false,
-    prompt: Some("Open repo".into()),
+    prompt: Some("Open".into()),
   });
   cx.spawn(async move |cx| {
     let folder = picked
@@ -78,26 +90,19 @@ fn pick(spawned: Spawned, cx: &mut App) {
       .and_then(Result::ok)
       .flatten()
       .and_then(|paths| paths.into_iter().next());
-    // git runs off the UI thread.
-    let in_repo = match folder.clone() {
-      Some(folder) => {
-        cx.background_executor()
-          .spawn(async move { Repo::locate(&folder).is_ok() })
-          .await
-      }
-      None => false,
-    };
     cx.update(|cx| match folder {
-      Some(folder) if in_repo => open(folder, spawned, cx),
-      Some(_) => pick(spawned, cx),
-      // Cancelled: there is nothing to show.
-      None => cx.quit(),
+      Some(folder) => open(folder, &daemons, cx),
+      // Cancelled at launch: there is nothing to show.
+      None if cx.windows().is_empty() => cx.quit(),
+      None => {}
     });
   })
   .detach();
 }
 
-fn open(repo: PathBuf, spawned: Spawned, cx: &mut App) {
+fn open(repo: PathBuf, daemons: &Daemons, cx: &mut App) {
+  let spawned = Spawned::default();
+  daemons.borrow_mut().push(spawned.clone());
   cx.open_window(gwm_gpui::window_options(cx), |window, cx| {
     let workspace = cx.new(|cx| Workspace::new(repo, spawned, cx));
     window.focus(&workspace.focus_handle(cx), cx);
