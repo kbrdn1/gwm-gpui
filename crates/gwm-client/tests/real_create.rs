@@ -31,6 +31,9 @@ fn isolate() -> PathBuf {
       // gwm takes it for `--allow-bootstrap`. Set here, whatever the user's
       // shell exports: the client must strip it, and the trust tests prove it.
       std::env::set_var("GWM_ALLOW_BOOTSTRAP", "1");
+      // No `~/.config/gwm/config.toml`: its base, its hooks stay out of the
+      // tests, on this machine as on CI.
+      std::env::set_var("GWM_NO_GLOBAL_CONFIG", "1");
     }
   });
   scratch.join("trust-ledger.toml")
@@ -47,16 +50,18 @@ fn git(dir: &Path, args: &[&str]) {
   assert!(status.success(), "git {args:?} failed");
 }
 
-/// `acme` with one commit, and `files` committed in it.
-fn acme(dir: &Path, files: &[(&str, &str)]) -> PathBuf {
+/// Where gwm puts `acme`'s worktrees: beside it, in the test's directory.
+/// gwm's default, without the user's config, is `{home}/cc-worktree/{repo}`.
+const BASE: &str = "[worktree]\nbase = \"{repo_parent}/{repo}-worktrees\"\n";
+
+/// `acme` with one commit, holding a `.gwm.toml` of [`BASE`] and `config`.
+fn acme(dir: &Path, config: &str) -> PathBuf {
   let acme = dir.join("acme");
   fs::create_dir(&acme).unwrap();
   git(&acme, &["init", "-q", "-b", "main"]);
-  for (name, content) in files {
-    fs::write(acme.join(name), content).unwrap();
-    git(&acme, &["add", name]);
-  }
-  git(&acme, &["commit", "-q", "--allow-empty", "-m", "init"]);
+  fs::write(acme.join(".gwm.toml"), format!("{BASE}{config}")).unwrap();
+  git(&acme, &["add", ".gwm.toml"]);
+  git(&acme, &["commit", "-q", "-m", "init"]);
   acme.canonicalize().unwrap()
 }
 
@@ -73,7 +78,7 @@ fn paths(repo: &Path) -> Vec<PathBuf> {
 fn creates_from_a_type_an_issue_and_a_description() {
   isolate();
   let dir = tempfile::tempdir().unwrap();
-  let acme = acme(dir.path(), &[]);
+  let acme = acme(dir.path(), "");
   let known = paths(&acme);
   let request = Create::triple("feat", "42", "Add login").unwrap();
 
@@ -82,6 +87,11 @@ fn creates_from_a_type_an_issue_and_a_description() {
   let created = request.created(&worktrees, &known).expect("the new worktree is listed");
   assert_eq!(created.branch.as_deref(), Some("feat/#42-add-login"));
   assert!(created.path.is_dir());
+  assert!(
+    created.path.starts_with(dir.path().canonicalize().unwrap()),
+    "{}",
+    created.path.display()
+  );
 }
 
 /// A free name with a slash: the branch keeps it, the directory does not.
@@ -89,7 +99,7 @@ fn creates_from_a_type_an_issue_and_a_description() {
 fn creates_with_a_free_name() {
   isolate();
   let dir = tempfile::tempdir().unwrap();
-  let acme = acme(dir.path(), &[]);
+  let acme = acme(dir.path(), "");
   let known = paths(&acme);
   let request = Create::name("team/spike").unwrap();
 
@@ -97,6 +107,11 @@ fn creates_with_a_free_name() {
   let worktrees = list(&acme);
   let created = request.created(&worktrees, &known).expect("the new worktree is listed");
   assert_eq!(created.name, "team-spike");
+  assert!(
+    created.path.starts_with(dir.path().canonicalize().unwrap()),
+    "{}",
+    created.path.display()
+  );
 }
 
 /// A type gwm does not know, and `--issue` with no forge to ask: gwm's words.
@@ -104,7 +119,7 @@ fn creates_with_a_free_name() {
 fn a_refusal_from_gwm_comes_back_as_gwm_wrote_it() {
   isolate();
   let dir = tempfile::tempdir().unwrap();
-  let acme = acme(dir.path(), &[]);
+  let acme = acme(dir.path(), "");
   let before = paths(&acme);
 
   let refused = gwm_client::create(&acme, &Create::triple("nope", "3", "x").unwrap()).unwrap_err();
@@ -131,7 +146,7 @@ fn an_unapproved_bootstrap_is_refused_with_how_to_approve_it() {
   let ledger = isolate();
   let dir = tempfile::tempdir().unwrap();
   let config = "[[bootstrap.command]]\nname = \"install\"\nrun = \"touch bootstrapped\"\n";
-  let acme = acme(dir.path(), &[(".gwm.toml", config)]);
+  let acme = acme(dir.path(), config);
   let before = paths(&acme);
 
   let refused = gwm_client::create(&acme, &Create::name("spike").unwrap()).unwrap_err();

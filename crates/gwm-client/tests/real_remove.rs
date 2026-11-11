@@ -32,6 +32,9 @@ fn isolate() {
       // gwm takes it for `--allow-bootstrap`. Set here, whatever the user's
       // shell exports: the client must strip it, and the trust tests prove it.
       std::env::set_var("GWM_ALLOW_BOOTSTRAP", "1");
+      // No `~/.config/gwm/config.toml`: its base, its hooks stay out of the
+      // tests, on this machine as on CI.
+      std::env::set_var("GWM_NO_GLOBAL_CONFIG", "1");
     }
   });
 }
