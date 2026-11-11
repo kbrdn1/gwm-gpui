@@ -29,6 +29,10 @@ assets/icons/LICENSE-MONOCODE):
   (crates/monocode-core/src/external_editor.rs);
 - src/open_menu.rs and src/theme.rs take its popover's radius, border, shadow,
   opaque fallback fill and row metrics (popover.rs, theme.rs floating_fill);
+- src/project_picker.rs takes its sidebar project header and its project
+  picker: the button row, the 36 px rows with a check on the current
+  project, the name and the parent folder in Menlo (pretty_parent), the
+  footer entry (shell.rs, pickers.rs);
 - src/login_shell.rs reimplements its login shell PATH probe: a login,
   interactive shell, a timeout, its process group killed past it
   (crates/monocode-core/src/scm/shell.rs).
