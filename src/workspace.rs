@@ -162,8 +162,11 @@ impl State {
 
   /// The removal of `name` failed, in gwm's words.
   /// Only this ends a removal early: nothing else knows gwm stopped.
-  fn end_removal(&mut self, name: &str, error: String) {
-    self.removing = None;
+  /// It ends that removal only: gwm prunes first, so the next one may already run.
+  fn end_removal(&mut self, path: &std::path::Path, name: &str, error: String) {
+    if self.removing.as_deref() == Some(path) {
+      self.removing = None;
+    }
     self.removal_error = Some(format!("Could not remove {name}: {error}"));
   }
 
@@ -449,7 +452,7 @@ impl Workspace {
         .await;
       let _ = this.update(cx, |workspace, cx| {
         if let Err(error) = removed {
-          workspace.state.end_removal(&name, error);
+          workspace.state.end_removal(&path, &name, error);
         }
         match listed {
           Some(Ok(worktrees)) => workspace.state.apply(Event::Snapshot(worktrees)),
@@ -766,7 +769,7 @@ pub(crate) mod tests {
     assert_eq!(state.removing, Some(fix.clone()));
     assert!(!state.begin_removal(docs.clone()));
     // Only the removal ending lets another start.
-    state.end_removal("fix-57", "gwm refused".to_owned());
+    state.end_removal(&fix, "fix-57", "gwm refused".to_owned());
     assert!(state.begin_removal(docs.clone()));
   }
 
@@ -777,7 +780,11 @@ pub(crate) mod tests {
   fn a_removal_error_outlives_its_worktree() {
     let mut state = state(None);
     assert!(state.begin_removal(PathBuf::from("/fix-57")));
-    state.end_removal("fix-57", "could not delete the directory".to_owned());
+    state.end_removal(
+      Path::new("/fix-57"),
+      "fix-57",
+      "could not delete the directory".to_owned(),
+    );
     state.apply(Event::Snapshot(vec![worktree("acme-api", true, None)]));
     let error = state.removal_error().unwrap();
     assert!(
@@ -786,6 +793,23 @@ pub(crate) mod tests {
     );
     state.begin_open(Path::new("/acme-api"));
     assert_eq!(state.removal_error(), None);
+  }
+
+  /// gwm prunes first: a removal can leave the list, letting the next one
+  /// start, and still fail late. That failure ends its own removal only.
+  #[test]
+  fn a_late_failure_does_not_end_the_next_removal() {
+    let mut state = state(None);
+    let (fix, docs) = (PathBuf::from("/fix-57"), PathBuf::from("/docs-71"));
+    assert!(state.begin_removal(fix.clone()));
+    state.apply(Event::Snapshot(vec![
+      worktree("acme-api", true, None),
+      worktree("docs-71", false, Some(60)),
+    ]));
+    assert!(state.begin_removal(docs.clone()));
+    state.end_removal(&fix, "fix-57", "post_remove hook failed".to_owned());
+    assert_eq!(state.activity(&docs), Some(Activity::Removing));
+    assert!(!state.begin_removal(PathBuf::from("/feat-42")));
   }
 
   #[test]
