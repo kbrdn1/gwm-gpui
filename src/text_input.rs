@@ -168,7 +168,7 @@ impl TextInput {
   }
 
   fn offset_to_utf16(&self, offset: usize) -> usize {
-    self.content[..offset].encode_utf16().count()
+    utf16_before(&self.content, offset)
   }
 
   fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
@@ -513,5 +513,30 @@ impl Render for TextInput {
 impl Focusable for TextInput {
   fn focus_handle(&self, _: &App) -> FocusHandle {
     self.focus.clone()
+  }
+}
+
+/// The UTF-16 length of `content` up to the byte `offset`. A walk, as GPUI's
+/// `examples/input.rs` does, not a slice: an offset from a layout painted
+/// before an edit can land past the end or inside a character.
+fn utf16_before(content: &str, offset: usize) -> usize {
+  content
+    .char_indices()
+    .take_while(|&(at, ch)| at + ch.len_utf8() <= offset)
+    .map(|(_, ch)| ch.len_utf16())
+    .sum()
+}
+
+#[cfg(test)]
+mod utf16_tests {
+  use super::utf16_before;
+
+  #[test]
+  fn a_stale_offset_does_not_panic() {
+    assert_eq!(utf16_before("aé", 1), 1);
+    assert_eq!(utf16_before("aé", 3), 2);
+    // Inside "é", then past the end: counts what precedes, never panics.
+    assert_eq!(utf16_before("aé", 2), 1);
+    assert_eq!(utf16_before("aé", 9), 2);
   }
 }
