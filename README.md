@@ -45,6 +45,7 @@ gwm stays the source of truth: this app holds no worktree logic. It is one more 
 | Live updates | the daemon's `subscribe` → `worktrees.changed`, refused unless `params.schema_version` is the one this build reads |
 | Remove a worktree | `gwm remove <name>`, a subprocess, once a fresh `gwm list --format=json` shows that name alone on the selected path: gwm removes by pattern and falls back to a substring match, it has no remove by path |
 | Create a worktree | `gwm create --issue <N> [--type <type>]`, `gwm create <type> <issue> <desc>` or `gwm create --name <name>`, a subprocess with stdin closed, never `--allow-bootstrap`, and `GWM_ALLOW_BOOTSTRAP` removed from its environment (as for `gwm remove`). The new worktree is found in the next list by its issue number or its branch, on a path that was not listed before, not in gwm's text output |
+| PR and CI | `gwm status --json`, run in the selected worktree's directory (by path: gwm's name patterns leave the main worktree out), each time a worktree is selected and when the list shows another branch, issue or PR for it, never per snapshot, one at a time, stopped after 30 s. Only an `https://` link opens |
 | Review | a `gwm` subprocess (planned) |
 
 ### Live updates

@@ -2,14 +2,14 @@
 //! views sit in. The frame is Monocode's rounded card: a washed chrome (title
 //! bar, sidebar, gutter, status bar) around an unwashed, rounded central card.
 
-use std::{path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use gpui::{
   App, Context, FocusHandle, Focusable, MouseButton, PathBuilder, Pixels, PromptLevel, ScrollHandle, SharedString,
   Window, actions, canvas, div, point, prelude::*, px,
 };
 use gwm_client::{
-  Create, Worktree,
+  Create, Links, Worktree,
   watch::{self, Event, Sockets, Source, Spawned},
 };
 
@@ -72,6 +72,33 @@ pub(crate) struct State {
   /// The last creation's error, in gwm's words, until the next one or the
   /// form is closed.
   create_error: Option<String>,
+  /// `gwm status` per worktree: what it said last, and the list's link fields
+  /// it was asked for. Fetched again on each selection and when those
+  /// change, never per snapshot: the daemon sends one a second, and gwm asks
+  /// GitHub each time.
+  links: HashMap<PathBuf, (LinkKey, Result<Links, String>)>,
+  /// The `gwm status` under way, one at a time, with the key it was asked for:
+  /// arrowing down the list asks GitHub for the row it stops on, not for each.
+  fetching: Option<(PathBuf, LinkKey)>,
+  /// The worktree the links were last asked for: they are asked again when
+  /// the user comes back to it, not on every repaint.
+  links_seen: Option<PathBuf>,
+}
+
+/// What `gwm status` reads that the list also shows: the branch, and the
+/// issue and PR numbers gwm links to it.
+type LinkKey = (Option<String>, Option<u64>, Option<u64>);
+
+fn link_key(worktree: &Worktree) -> LinkKey {
+  (worktree.branch.clone(), worktree.issue, worktree.pr)
+}
+
+/// Whether an answer asked for `asked` still holds for a list showing `now`.
+/// gwm saves the PR it detects, so the next list may show the answer's own
+/// PR: that is the answer coming back, not a new link to ask about.
+fn still(asked: &LinkKey, answer: &Result<Links, String>, now: &LinkKey) -> bool {
+  let answered = answer.as_ref().ok().map(|links| links.pr.as_ref().map(|pr| pr.number));
+  asked.0 == now.0 && asked.1 == now.1 && (asked.2 == now.2 || answered == Some(now.2))
 }
 
 impl State {
@@ -89,6 +116,9 @@ impl State {
       picked_while_creating: false,
       to_select: None,
       create_error: None,
+      links: HashMap::new(),
+      fetching: None,
+      links_seen: None,
     }
   }
 
@@ -274,6 +304,49 @@ impl State {
     !worktree.is_main && self.opened_in.as_deref() != Some(worktree.path.as_path()) && self.removing.is_none()
   }
 
+  /// The worktree whose `gwm status` is to run now, if any: the selected
+  /// one, when no other runs, and the user just selected it (a PR merges, a
+  /// CI ends, the list says nothing of it) or nothing is known for its
+  /// current link fields. What was known stays shown meanwhile.
+  fn begin_links(&mut self) -> Option<PathBuf> {
+    if self.fetching.is_some() {
+      return None;
+    }
+    let worktree = self.selected()?;
+    let (path, key) = (worktree.path.clone(), link_key(worktree));
+    let selected_now = self.links_seen.as_ref() != Some(&path);
+    self.links_seen = Some(path.clone());
+    let known = self
+      .links
+      .get(&path)
+      .is_some_and(|(known, result)| still(known, result, &key));
+    if known && !selected_now {
+      return None;
+    }
+    self.fetching = Some((path.clone(), key));
+    Some(path)
+  }
+
+  /// `gwm status` returned, for the worktree it was run on, whichever is
+  /// selected now.
+  fn end_links(&mut self, result: Result<Links, String>) {
+    if let Some((path, key)) = self.fetching.take() {
+      self.links.insert(path, (key, result));
+    }
+  }
+
+  /// Whether `gwm status` runs for `worktree` now.
+  pub fn refreshing(&self, worktree: &Worktree) -> bool {
+    self.fetching.as_ref().is_some_and(|(path, _)| *path == worktree.path)
+  }
+
+  /// What `gwm status` said about `worktree`, `None` until it answers for
+  /// the link fields the list shows now.
+  pub fn links(&self, worktree: &Worktree) -> Option<&Result<Links, String>> {
+    let (known, result) = self.links.get(&worktree.path)?;
+    still(known, result, &link_key(worktree)).then_some(result)
+  }
+
   fn position(&self, order: &[usize]) -> Option<usize> {
     let selected = self.selected.as_deref()?;
     order.iter().position(|&index| self.worktrees()[index].path == selected)
@@ -412,6 +485,11 @@ impl Workspace {
       });
     })
     .detach();
+    // The selected worktree's links are due whenever the state moves: its
+    // selection, its list. Checked on every notify, fetched only when due.
+    cx.observe_self(|workspace, cx| workspace.fetch_links(cx)).detach();
+    cx.spawn(async move |this, cx| this.update(cx, |workspace, cx| workspace.fetch_links(cx)))
+      .detach();
     // Ages are worded to the minute ("25m"): repaint once a minute, or they
     // would only move with the next snapshot.
     cx.spawn(async move |this, cx| {
@@ -434,6 +512,23 @@ impl Workspace {
       sidebar_scroll: ScrollHandle::new(),
       focus: cx.focus_handle(),
     }
+  }
+
+  /// Runs the selected worktree's `gwm status` off the UI thread, when it is
+  /// due (see [`State::begin_links`]).
+  fn fetch_links(&mut self, cx: &mut Context<Self>) {
+    let Some(path) = self.state.begin_links() else {
+      return;
+    };
+    cx.notify();
+    cx.spawn(async move |this, cx| {
+      let links = cx.background_spawn(async move { gwm_client::status(&path) }).await;
+      let _ = this.update(cx, |workspace, cx| {
+        workspace.state.end_links(links);
+        cx.notify();
+      });
+    })
+    .detach();
   }
 
   /// Selects the row `down` rows below the first and opens or closes the
@@ -700,6 +795,8 @@ impl Render for Workspace {
             removal_error: self.state.removal_error(),
             can_remove: self.state.can_remove(worktree),
             menu: self.menu_open.then_some(self.apps.as_deref()),
+            links: self.state.links(worktree),
+            refreshing: self.state.refreshing(worktree),
           };
           detail::detail(worktree, ages, actions, cx).into_any_element()
         }
@@ -1172,6 +1269,124 @@ pub(crate) mod tests {
     listed.push(worktree("spike", false, Some(0)));
     state.apply(Event::Snapshot(listed));
     assert_eq!(state.selected().unwrap().id, "docs-71");
+  }
+
+  /// What `gwm status` says of a worktree with PR `pr`.
+  fn with_pr(pr: u64) -> Result<Links, String> {
+    let json = format!(r#"{{"branch":"x","issue":null,"pr":{{"number":{pr},"source":"detected"}}}}"#);
+    Ok(serde_json::from_str(&json).unwrap())
+  }
+
+  /// Once per selection, not per snapshot: the daemon sends one a second.
+  #[test]
+  fn links_are_fetched_on_each_selection_not_per_snapshot() {
+    let mut state = state(None);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+    assert_eq!(state.links(state.selected().unwrap()), None);
+    assert_eq!(state.begin_links(), None);
+    state.end_links(with_pr(706));
+    assert_eq!(state.links(state.selected().unwrap()), Some(&with_pr(706)));
+    state.apply(Event::Snapshot(demo()));
+    assert_eq!(state.begin_links(), None);
+    state.step(1);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/docs-71")));
+    state.end_links(with_pr(9));
+    // Back to a worktree already fetched: its CI may have finished since.
+    state.step(-1);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+  }
+
+  /// `gwm status` saves the PR it detects, and the next list shows it: that
+  /// is its own answer coming back, not a new link to ask about.
+  #[test]
+  fn the_pr_gwm_status_detected_does_not_ask_again() {
+    let mut state = state(None);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+    state.end_links(with_pr(706));
+    let mut listed = demo();
+    listed[0].pr = Some(706);
+    state.apply(Event::Snapshot(listed));
+    assert_eq!(state.links(state.selected().unwrap()), Some(&with_pr(706)));
+    assert_eq!(state.begin_links(), None);
+  }
+
+  /// Coming back to a worktree asks gwm again, and shows what it said last
+  /// until it answers.
+  #[test]
+  fn a_reselection_refetches_and_keeps_the_last_result_shown() {
+    let mut state = state(None);
+    state.begin_links();
+    state.end_links(with_pr(706));
+    state.step(1);
+    state.begin_links();
+    state.end_links(with_pr(9));
+    state.step(-1);
+    assert!(!state.refreshing(state.selected().unwrap()));
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+    assert_eq!(state.links(state.selected().unwrap()), Some(&with_pr(706)));
+    assert!(state.refreshing(state.selected().unwrap()));
+    state.end_links(with_pr(707));
+    assert_eq!(state.links(state.selected().unwrap()), Some(&with_pr(707)));
+    assert!(!state.refreshing(state.selected().unwrap()));
+    assert_eq!(state.begin_links(), None);
+  }
+
+  /// gh is slow: arrowing down the list asks for the row it stops on, and a
+  /// result lands on the worktree it was asked for, never on the selection.
+  #[test]
+  fn one_fetch_at_a_time_and_its_result_stays_on_its_worktree() {
+    let mut state = state(None);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+    state.step(1);
+    state.step(1);
+    assert_eq!(state.begin_links(), None);
+    state.end_links(with_pr(706));
+    assert_eq!(state.links(state.selected().unwrap()), None);
+    assert_eq!(state.links(&state.worktrees()[0]), Some(&with_pr(706)));
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/fix-57")));
+  }
+
+  /// The list's branch, issue or PR changed: what gwm said before no longer
+  /// holds, even when it changed while gwm ran.
+  #[test]
+  fn links_are_fetched_again_when_the_list_links_change() {
+    let mut state = state(None);
+    state.begin_links();
+    state.end_links(with_pr(1));
+    let mut worktrees = demo();
+    worktrees[0].pr = Some(706);
+    state.apply(Event::Snapshot(worktrees.clone()));
+    assert_eq!(state.links(state.selected().unwrap()), None);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+
+    worktrees[0].branch = Some("dev".to_owned());
+    state.apply(Event::Snapshot(worktrees));
+    state.end_links(with_pr(706));
+    assert_eq!(state.links(state.selected().unwrap()), None);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+  }
+
+  /// A failure is shown as is, not retried on every repaint, and retried when
+  /// the user comes back to the worktree, shown until gwm answers.
+  #[test]
+  fn a_failure_is_kept_until_the_worktree_is_selected_again() {
+    let mut state = state(None);
+    state.begin_links();
+    state.end_links(Err("gh: HTTP 502".to_owned()));
+    assert_eq!(
+      state.links(state.selected().unwrap()),
+      Some(&Err("gh: HTTP 502".to_owned()))
+    );
+    assert_eq!(state.begin_links(), None);
+    state.step(1);
+    state.begin_links();
+    state.end_links(with_pr(9));
+    state.step(-1);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+    assert_eq!(
+      state.links(state.selected().unwrap()),
+      Some(&Err("gh: HTTP 502".to_owned()))
+    );
   }
 
   #[test]

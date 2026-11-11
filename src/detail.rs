@@ -1,10 +1,11 @@
 //! The central card: the selected worktree, from the contract's fields and
 //! nothing else, and what can be done to it: open it in an app, remove it.
-//! Its changed files are not here: `gwm status --json` carries `branch`,
-//! `issue` and `pr`, no file list.
+//! Its issue and PR come from `gwm status --json`, live when gwm's `gh`
+//! resolved them. Its changed files are not here: no gwm contract lists them,
+//! requested in kbrdn1/gwm-cli#712.
 
-use gpui::{Context, FontWeight, Hsla, SharedString, div, prelude::*, px};
-use gwm_client::Worktree;
+use gpui::{AnyElement, Context, FontWeight, Hsla, SharedString, div, prelude::*, px};
+use gwm_client::{IssueState, Links, PrState, Worktree};
 
 use crate::{
   age::Ages,
@@ -25,6 +26,10 @@ pub(crate) struct Actions<'a> {
   pub removal_error: Option<&'a str>,
   pub can_remove: bool,
   pub menu: Option<Option<&'a [Installed]>>,
+  /// What `gwm status` said last, `None` until it answers.
+  pub links: Option<&'a Result<Links, String>>,
+  /// `gwm status` runs again: what `links` holds may be stale.
+  pub refreshing: bool,
 }
 
 /// How much of the HEAD oid to show, as `git log --oneline` would.
@@ -54,6 +59,7 @@ pub(crate) fn detail(
     || "—".to_owned(),
     |seconds| ages.label(seconds),
   );
+  let (links, refreshing) = (actions.links, actions.refreshing);
   let flags: Vec<&str> = [
     (worktree.is_main, "main worktree"),
     (worktree.is_locked, "locked"),
@@ -110,13 +116,141 @@ pub(crate) fn detail(
         ))
         .child(fact("Working tree", text(working_tree.0, working_tree.1)))
         .child(fact("Upstream", text(&upstream, theme::ink(0.9))))
-        .child(fact("Issue", text(&number(worktree.issue), theme::ink(0.9))))
-        .child(fact("Pull request", text(&number(worktree.pr), theme::ink(0.9))))
+        .child(fact("Issue", issue(worktree.issue, links)))
+        .child(fact("Pull request", pull_request(worktree.pr, links)))
         .child(fact("Branch age", text(&branch_age, theme::ink(0.9))))
         .when(!flags.is_empty(), |facts| {
           facts.child(fact("Flags", text(&flags.join(", "), theme::ink(0.9))))
         }),
     )
+    .children(
+      links
+        .and_then(|links| links.as_ref().err())
+        .map(|error| error_text(format!("Issue and pull request: {error}"))),
+    )
+    .when(links.is_some() && refreshing, |card| {
+      card.child(
+        div()
+          .text_size(px(12.))
+          .text_color(theme::ink(0.45))
+          .child("Refreshing the issue and pull request…"),
+      )
+    })
+}
+
+/// The issue as `gwm status` gave it. Before it answers, or when it failed,
+/// the list's number.
+fn issue(listed: Option<u64>, links: Option<&Result<Links, String>>) -> AnyElement {
+  let Some(Ok(links)) = links else {
+    return unresolved(listed, links.is_none());
+  };
+  let Some(issue) = &links.issue else {
+    return text("none", theme::ink(0.9)).into_any_element();
+  };
+  let state = issue.state.map(|state| match state {
+    IssueState::Open => ("Open", theme::color(theme::CLEAN)),
+    IssueState::Closed => ("Closed", theme::color(theme::SETTLED)),
+  });
+  link(
+    "issue",
+    issue.number,
+    state,
+    None,
+    issue.title.as_deref(),
+    issue.url.clone(),
+  )
+}
+
+/// The PR as `gwm status` gave it, with its checks. Before it answers, or
+/// when it failed, the list's number.
+fn pull_request(listed: Option<u64>, links: Option<&Result<Links, String>>) -> AnyElement {
+  let Some(Ok(links)) = links else {
+    return unresolved(listed, links.is_none());
+  };
+  let Some(pr) = &links.pr else {
+    return text("none", theme::ink(0.9)).into_any_element();
+  };
+  let state = pr.state.map(|state| match state {
+    PrState::Open => ("Open", theme::color(theme::CLEAN)),
+    PrState::Draft => ("Draft", theme::ink(0.5)),
+    PrState::Merged => ("Merged", theme::color(theme::SETTLED)),
+    PrState::Closed => ("Closed", theme::color(theme::ERROR)),
+  });
+  let checks = match (pr.checks_passed, pr.checks_total) {
+    // No checks: nothing to say, as gwm says nothing.
+    (Some(passed), Some(total)) if total > 0 => {
+      // Fewer passed than ran: failing or still running, the contract does
+      // not say which.
+      let color = if passed == total { theme::CLEAN } else { theme::WARNING };
+      Some((format!("{passed}/{total} checks passed"), theme::color(color)))
+    }
+    _ => None,
+  };
+  link(
+    "pull-request",
+    pr.number,
+    state,
+    checks,
+    pr.title.as_deref(),
+    pr.url.clone(),
+  )
+}
+
+fn unresolved(listed: Option<u64>, loading: bool) -> AnyElement {
+  div()
+    .flex()
+    .items_center()
+    .gap(px(8.))
+    .children(unresolved_number(listed, loading).map(|label| text(&label, theme::ink(0.9)).flex_none()))
+    .when(loading, |row| row.child(text("loading…", theme::ink(0.45))))
+    .into_any_element()
+}
+
+/// The list's number while `gwm status` runs or after it failed. Without
+/// one, nothing while it runs, "unknown" once it failed: never "none".
+fn unresolved_number(listed: Option<u64>, loading: bool) -> Option<String> {
+  match listed {
+    Some(number) => Some(format!("#{number}")),
+    None => (!loading).then(|| "unknown".to_owned()),
+  }
+}
+
+/// Whether a click may hand `url` to the system: gwm copies it from the
+/// forge, and a `file://` or an app's own scheme would launch something else.
+fn openable(url: &str) -> bool {
+  url.starts_with("https://")
+}
+
+/// `#n`, then each live field gwm gave: its state, its checks, its title.
+/// Without any, it says so. A click opens its `url`.
+fn link(
+  id: &'static str,
+  number: u64,
+  state: Option<(&'static str, Hsla)>,
+  checks: Option<(String, Hsla)>,
+  title: Option<&str>,
+  url: Option<String>,
+) -> AnyElement {
+  let live = state.is_some() || checks.is_some() || title.is_some();
+  div()
+    .id(id)
+    .min_w_0()
+    .flex()
+    .items_center()
+    .gap(px(8.))
+    .child(text(&format!("#{number}"), theme::ink(0.9)).flex_none())
+    .children(state.map(|(label, color)| text(label, color).flex_none()))
+    .children(checks.map(|(label, color)| text(&label, color).flex_none()))
+    .children(title.map(|title| text(title, theme::ink(0.6))))
+    .when(!live, |row| row.child(text("no live state from gwm", theme::ink(0.45))))
+    .when_some(url.filter(|url| openable(url)), |row, url| {
+      row
+        .cursor_pointer()
+        .rounded(px(4.))
+        .hover(|row| row.bg(theme::hover()))
+        .on_click(move |_, _, cx| cx.open_url(&url))
+    })
+    .into_any_element()
 }
 
 /// "Open in…" and "Remove…", then what came of the last action: gwm's or
@@ -205,11 +339,7 @@ pub(crate) fn pill(label: &'static str, color: Hsla) -> gpui::Div {
     .child(label)
 }
 
-fn number(value: Option<u64>) -> String {
-  value.map_or_else(|| "none".to_owned(), |number| format!("#{number}"))
-}
-
-fn fact(label: &'static str, value: gpui::Div) -> impl IntoElement {
+fn fact(label: &'static str, value: impl IntoElement) -> impl IntoElement {
   div()
     .h(px(30.))
     .flex()
@@ -224,7 +354,7 @@ fn fact(label: &'static str, value: gpui::Div) -> impl IntoElement {
         .text_color(theme::ink(0.45))
         .child(label),
     )
-    .child(value.flex_1())
+    .child(div().flex_1().min_w_0().child(value))
 }
 
 fn text(value: &str, color: Hsla) -> gpui::Div {
@@ -236,4 +366,32 @@ fn mono(value: String) -> gpui::Div {
     .font_family(theme::MONO_FONT)
     .text_size(px(12.))
     .text_color(theme::ink(0.9))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn only_an_https_url_is_opened() {
+    assert!(openable("https://github.com/kbrdn1/gwm-cli/pull/705"));
+    for url in [
+      "http://github.com/kbrdn1/gwm-cli/pull/705",
+      "file:///Applications/Calculator.app",
+      "x-forge-app://open",
+      "javascript:alert(1)",
+      " https://github.com",
+      "",
+    ] {
+      assert!(!openable(url), "{url}");
+    }
+  }
+
+  #[test]
+  fn a_failed_status_never_says_none() {
+    assert_eq!(unresolved_number(Some(705), false).as_deref(), Some("#705"));
+    assert_eq!(unresolved_number(None, false).as_deref(), Some("unknown"));
+    assert_eq!(unresolved_number(Some(705), true).as_deref(), Some("#705"));
+    assert_eq!(unresolved_number(None, true), None);
+  }
 }

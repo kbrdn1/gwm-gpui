@@ -8,9 +8,11 @@
 
 mod create;
 pub mod daemon;
+mod status;
 pub mod watch;
 
 pub use create::{Create, Number, create};
+pub use status::{IssueLink, IssueState, Links, PrLink, PrState, status};
 
 use std::{
   ffi::OsStr,
