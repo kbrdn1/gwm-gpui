@@ -18,7 +18,12 @@ assets/icons/LICENSE-MONOCODE):
 - src/age.rs reimplements its relative time format and day buckets
   (crates/monocode-core/src/time.rs, shell/sidebar_list.rs);
 - src/workspace.rs lays out its rounded-card frame, and paints the card's
-  corners as its off-macOS fallback does (shell/layout.rs).
+  corners as its off-macOS fallback does (shell/layout.rs);
+- src/apps.rs takes its list of editors and finds them as it does, by their
+  .app bundle, the user's Applications first, opened with /usr/bin/open -a
+  (crates/monocode-core/src/external_editor.rs);
+- src/open_menu.rs and src/theme.rs take its popover's radius, border, shadow,
+  opaque fallback fill and row metrics (popover.rs, theme.rs floating_fill).
 
 The icons in assets/icons/ are Monocode's copies of Hugeicons Stroke Rounded
 (@hugeicons/core-free-icons 4.3.0), Copyright (c) Hugeicons, licensed under
