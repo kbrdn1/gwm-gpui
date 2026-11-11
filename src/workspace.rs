@@ -64,6 +64,9 @@ pub(crate) struct State {
   /// The `gwm create` under way, one at a time, with the paths listed when it
   /// started.
   creating: Option<(Create, Vec<PathBuf>)>,
+  /// The user picked a worktree while gwm ran: the created one does not take
+  /// the selection when gwm returns.
+  picked_while_creating: bool,
   /// A creation gwm finished, whose worktree is selected once a list shows it.
   to_select: Option<(Create, Vec<PathBuf>)>,
   /// The last creation's error, in gwm's words, until the next one or the
@@ -83,6 +86,7 @@ impl State {
       removal_error: None,
       opened_in: None,
       creating: None,
+      picked_while_creating: false,
       to_select: None,
       create_error: None,
     }
@@ -151,6 +155,7 @@ impl State {
   fn select(&mut self, path: PathBuf) {
     self.selected = Some(path);
     self.to_select = None;
+    self.picked_while_creating = self.creating.is_some();
   }
 
   /// Whether a creation can start: once a list is shown, which tells the new
@@ -166,6 +171,7 @@ impl State {
     }
     let known = self.worktrees().iter().map(|worktree| worktree.path.clone()).collect();
     self.creating = Some((request, known));
+    self.picked_while_creating = false;
     self.create_error = None;
     true
   }
@@ -176,7 +182,7 @@ impl State {
     let creating = self.creating.take();
     match result {
       Ok(()) => {
-        self.to_select = creating;
+        self.to_select = creating.filter(|_| !self.picked_while_creating);
         self.select_created();
       }
       Err(error) => self.create_error = Some(error),
@@ -1139,6 +1145,20 @@ pub(crate) mod tests {
       assert!(!state.creating());
     }
     assert!(state(None).can_create());
+  }
+
+  /// The user picks a worktree while gwm still runs: gwm's return does not take
+  /// the selection back.
+  #[test]
+  fn a_selection_made_while_gwm_runs_is_not_taken_back() {
+    let mut state = state(None);
+    assert!(state.begin_create(Create::name("spike").unwrap()));
+    state.select(PathBuf::from("/docs-71"));
+    state.end_create(Ok(()));
+    let mut listed = demo();
+    listed.push(worktree("spike", false, Some(0)));
+    state.apply(Event::Snapshot(listed));
+    assert_eq!(state.selected().unwrap().id, "docs-71");
   }
 
   /// The user moved on before the list showed the new worktree.
