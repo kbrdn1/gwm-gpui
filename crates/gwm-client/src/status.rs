@@ -3,8 +3,12 @@
 //! resolved it. Slow (gwm asks GitHub) and able to fail: run off the UI thread.
 
 use std::{
+  io::Read,
+  os::unix::process::CommandExt,
   path::Path,
-  process::{Command, Stdio},
+  process::{Command, Output, Stdio},
+  thread,
+  time::{Duration, Instant},
 };
 
 use serde::Deserialize;
@@ -58,14 +62,71 @@ pub enum PrState {
 /// gwm's patterns skip the main worktree and fall back to a substring match.
 /// The error is a message for the user, gwm's stderr as is when gwm fails.
 pub fn status(worktree: &Path) -> Result<Links, String> {
-  let output = Command::new("gwm")
-    .args(["status", "--json"])
-    .current_dir(worktree)
+  // Spawned there, a missing directory would read as a missing gwm.
+  if !worktree.is_dir() {
+    return Err(format!("{} no longer exists", worktree.display()));
+  }
+  let mut gwm = Command::new("gwm");
+  gwm.args(["status", "--json"]).current_dir(worktree);
+  read(output_within(gwm, TIMEOUT)?)
+}
+
+/// How long gwm, and the `gh` it runs, may take. The app runs one `gwm
+/// status` at a time: a stalled one would hold every card on "loading…".
+const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Runs `command`, stdin closed, and stops it at `limit`: it and what it
+/// started (gwm's `gh`), killed as one process group, so nothing keeps its
+/// pipes open after.
+fn output_within(mut command: Command, limit: Duration) -> Result<Output, String> {
+  let mut child = command
     .stdin(Stdio::null())
-    .output()
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .process_group(0)
+    .spawn()
     .map_err(|error| format!("could not run gwm: {error}"))?;
+  // Read while it runs: a full pipe would stall it.
+  let drain = |pipe: Option<Box<dyn Read + Send>>| {
+    thread::spawn(move || {
+      let mut bytes = Vec::new();
+      if let Some(mut pipe) = pipe {
+        let _ = pipe.read_to_end(&mut bytes);
+      }
+      bytes
+    })
+  };
+  let stdout = drain(child.stdout.take().map(|pipe| Box::new(pipe) as _));
+  let stderr = drain(child.stderr.take().map(|pipe| Box::new(pipe) as _));
+  let deadline = Instant::now() + limit;
+  let status = loop {
+    match child.try_wait() {
+      Ok(Some(status)) => break status,
+      Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+      Ok(None) => {
+        let group = i32::try_from(child.id()).map_err(|error| error.to_string())?;
+        // SAFETY: `kill` takes no pointer; `-group` names the group this child leads.
+        unsafe { libc::kill(-group, libc::SIGKILL) };
+        let _ = child.wait();
+        return Err(format!("gwm did not answer within {} s: stopped", limit.as_secs_f32()));
+      }
+      Err(error) => return Err(format!("could not wait for gwm: {error}")),
+    }
+  };
+  Ok(Output {
+    status,
+    stdout: stdout.join().unwrap_or_default(),
+    stderr: stderr.join().unwrap_or_default(),
+  })
+}
+
+fn read(output: Output) -> Result<Links, String> {
   if !output.status.success() {
-    return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if stderr.is_empty() {
+      return Err(format!("gwm status failed ({})", output.status));
+    }
+    return Err(stderr);
   }
   parse(&output.stdout)
 }
@@ -158,6 +219,33 @@ mod tests {
   fn ignores_fields_added_after_this_build() {
     let json = LINKED.replace(r#""number":705,"#, r#""number":705,"from_the_future":{"a":1},"#);
     assert_eq!(parse(json.as_bytes()), parse(LINKED.as_bytes()));
+  }
+
+  /// A prunable worktree: its directory is gone, gwm is not missing.
+  #[test]
+  fn a_worktree_whose_directory_is_gone_says_so() {
+    let error = status(Path::new("/nonexistent/gwm-gpui-test/feat-1")).unwrap_err();
+    assert!(error.contains("no longer exists"), "{error}");
+  }
+
+  /// A stalled `gh` behind gwm: stopped at the limit, said, not waited on.
+  #[test]
+  fn a_command_that_does_not_answer_is_stopped() {
+    let mut sleep = Command::new("sleep");
+    sleep.arg("10");
+    let started = std::time::Instant::now();
+    let error = output_within(sleep, Duration::from_millis(200)).unwrap_err();
+    assert!(error.contains("did not answer within"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let mut echo = Command::new("echo");
+    echo.arg("{}");
+    assert_eq!(output_within(echo, Duration::from_secs(5)).unwrap().stdout, b"{}\n");
+  }
+
+  #[test]
+  fn a_failure_without_stderr_says_how_gwm_exited() {
+    let output = Command::new("false").output().unwrap();
+    assert_eq!(read(output).unwrap_err(), "gwm status failed (exit status: 1)");
   }
 
   #[test]
