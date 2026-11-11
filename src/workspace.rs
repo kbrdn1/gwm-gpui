@@ -72,14 +72,15 @@ pub(crate) struct State {
   /// The last creation's error, in gwm's words, until the next one or the
   /// form is closed.
   create_error: Option<String>,
-  /// `gwm status` per worktree, for the session: what it said, and the list's
-  /// link fields it was asked for. Fetched again when those change, not per
-  /// snapshot: the daemon sends one a second, and gwm asks GitHub each time.
+  /// `gwm status` per worktree: what it said last, and the list's link fields
+  /// it was asked for. Fetched again on each selection and when those
+  /// change, never per snapshot: the daemon sends one a second, and gwm asks
+  /// GitHub each time.
   links: HashMap<PathBuf, (LinkKey, Result<Links, String>)>,
   /// The `gwm status` under way, one at a time, with the key it was asked for:
   /// arrowing down the list asks GitHub for the row it stops on, not for each.
   fetching: Option<(PathBuf, LinkKey)>,
-  /// The worktree the links were last asked for: a failure is retried when
+  /// The worktree the links were last asked for: they are asked again when
   /// the user comes back to it, not on every repaint.
   links_seen: Option<PathBuf>,
 }
@@ -296,22 +297,21 @@ impl State {
   }
 
   /// The worktree whose `gwm status` is to run now, if any: the selected
-  /// one, when no other runs, and nothing is known for its current link
-  /// fields, or what is known is a failure the user just came back to.
+  /// one, when no other runs, and the user just selected it (a PR merges, a
+  /// CI ends, the list says nothing of it) or nothing is known for its
+  /// current link fields. What was known stays shown meanwhile.
   fn begin_links(&mut self) -> Option<PathBuf> {
     if self.fetching.is_some() {
       return None;
     }
     let worktree = self.selected()?;
     let (path, key) = (worktree.path.clone(), link_key(worktree));
-    let came_back = self.links_seen.as_ref() != Some(&path);
+    let selected_now = self.links_seen.as_ref() != Some(&path);
     self.links_seen = Some(path.clone());
-    match self.links.get(&path) {
-      Some((known, Ok(_))) if *known == key => return None,
-      Some((known, Err(_))) if *known == key && !came_back => return None,
-      _ => {}
+    let known = self.links.get(&path).is_some_and(|(known, _)| *known == key);
+    if known && !selected_now {
+      return None;
     }
-    self.links.remove(&path);
     self.fetching = Some((path.clone(), key));
     Some(path)
   }
@@ -322,6 +322,11 @@ impl State {
     if let Some((path, key)) = self.fetching.take() {
       self.links.insert(path, (key, result));
     }
+  }
+
+  /// Whether `gwm status` runs for `worktree` now.
+  pub fn refreshing(&self, worktree: &Worktree) -> bool {
+    self.fetching.as_ref().is_some_and(|(path, _)| *path == worktree.path)
   }
 
   /// What `gwm status` said about `worktree`, `None` until it answers for
@@ -780,6 +785,7 @@ impl Render for Workspace {
             can_remove: self.state.can_remove(worktree),
             menu: self.menu_open.then_some(self.apps.as_deref()),
             links: self.state.links(worktree),
+            refreshing: self.state.refreshing(worktree),
           };
           detail::detail(worktree, ages, actions, cx).into_any_element()
         }
@@ -1262,7 +1268,7 @@ pub(crate) mod tests {
 
   /// Once per selection, not per snapshot: the daemon sends one a second.
   #[test]
-  fn links_are_fetched_once_per_worktree_and_kept() {
+  fn links_are_fetched_on_each_selection_not_per_snapshot() {
     let mut state = state(None);
     assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
     assert_eq!(state.links(state.selected().unwrap()), None);
@@ -1271,13 +1277,33 @@ pub(crate) mod tests {
     assert_eq!(state.links(state.selected().unwrap()), Some(&with_pr(706)));
     state.apply(Event::Snapshot(demo()));
     assert_eq!(state.begin_links(), None);
-    // Back to a worktree already fetched: nothing runs again.
     state.step(1);
     assert_eq!(state.begin_links(), Some(PathBuf::from("/docs-71")));
     state.end_links(with_pr(9));
+    // Back to a worktree already fetched: its CI may have finished since.
     state.step(-1);
-    assert_eq!(state.begin_links(), None);
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
+  }
+
+  /// Coming back to a worktree asks gwm again, and shows what it said last
+  /// until it answers.
+  #[test]
+  fn a_reselection_refetches_and_keeps_the_last_result_shown() {
+    let mut state = state(None);
+    state.begin_links();
+    state.end_links(with_pr(706));
+    state.step(1);
+    state.begin_links();
+    state.end_links(with_pr(9));
+    state.step(-1);
+    assert!(!state.refreshing(state.selected().unwrap()));
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
     assert_eq!(state.links(state.selected().unwrap()), Some(&with_pr(706)));
+    assert!(state.refreshing(state.selected().unwrap()));
+    state.end_links(with_pr(707));
+    assert_eq!(state.links(state.selected().unwrap()), Some(&with_pr(707)));
+    assert!(!state.refreshing(state.selected().unwrap()));
+    assert_eq!(state.begin_links(), None);
   }
 
   /// gh is slow: arrowing down the list asks for the row it stops on, and a
@@ -1316,7 +1342,7 @@ pub(crate) mod tests {
   }
 
   /// A failure is shown as is, not retried on every repaint, and retried when
-  /// the user comes back to the worktree.
+  /// the user comes back to the worktree, shown until gwm answers.
   #[test]
   fn a_failure_is_kept_until_the_worktree_is_selected_again() {
     let mut state = state(None);
@@ -1332,7 +1358,10 @@ pub(crate) mod tests {
     state.end_links(with_pr(9));
     state.step(-1);
     assert_eq!(state.begin_links(), Some(PathBuf::from("/acme-api")));
-    assert_eq!(state.links(state.selected().unwrap()), None);
+    assert_eq!(
+      state.links(state.selected().unwrap()),
+      Some(&Err("gh: HTTP 502".to_owned()))
+    );
   }
 
   #[test]

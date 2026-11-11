@@ -26,8 +26,10 @@ pub(crate) struct Actions<'a> {
   pub removal_error: Option<&'a str>,
   pub can_remove: bool,
   pub menu: Option<Option<&'a [Installed]>>,
-  /// What `gwm status` said, `None` while it runs.
+  /// What `gwm status` said last, `None` until it answers.
   pub links: Option<&'a Result<Links, String>>,
+  /// `gwm status` runs again: what `links` holds may be stale.
+  pub refreshing: bool,
 }
 
 /// How much of the HEAD oid to show, as `git log --oneline` would.
@@ -57,7 +59,7 @@ pub(crate) fn detail(
     || "—".to_owned(),
     |seconds| ages.label(seconds),
   );
-  let links = actions.links;
+  let (links, refreshing) = (actions.links, actions.refreshing);
   let flags: Vec<&str> = [
     (worktree.is_main, "main worktree"),
     (worktree.is_locked, "locked"),
@@ -126,6 +128,14 @@ pub(crate) fn detail(
         .and_then(|links| links.as_ref().err())
         .map(|error| error_text(format!("Issue and pull request: {error}"))),
     )
+    .when(links.is_some() && refreshing, |card| {
+      card.child(
+        div()
+          .text_size(px(12.))
+          .text_color(theme::ink(0.45))
+          .child("Refreshing the issue and pull request…"),
+      )
+    })
 }
 
 /// The issue as `gwm status` gave it. Before it answers, or when it failed,
