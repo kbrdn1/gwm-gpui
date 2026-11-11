@@ -6,15 +6,20 @@ use std::{
   fs,
   path::Path,
   process::{Command, Stdio},
+  sync::Once,
 };
 
 use gwm_client::{IssueLink, Links};
 
 /// No `~/.config/gwm/config.toml`: its settings stay out of the test.
 fn isolate() {
-  // SAFETY: set before this binary spawns a process, and the same value
-  // whichever test sets it first.
-  unsafe { std::env::set_var("GWM_NO_GLOBAL_CONFIG", "1") };
+  static ONCE: Once = Once::new();
+  ONCE.call_once(|| {
+    // SAFETY: every test calls `isolate` before it spawns a process or reads
+    // the environment, and `Once` holds the others until this returns, so no
+    // thread reads the environment while it is written. Nothing writes it after.
+    unsafe { std::env::set_var("GWM_NO_GLOBAL_CONFIG", "1") };
+  });
 }
 
 fn git(dir: &Path, args: &[&str]) {
