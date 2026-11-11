@@ -6,8 +6,11 @@
 //! the contract adds optional fields without a version bump, and asks consumers
 //! to ignore the ones they don't know.
 
+mod create;
 pub mod daemon;
 pub mod watch;
+
+pub use create::{Create, Number, create};
 
 use std::{
   ffi::OsStr,
