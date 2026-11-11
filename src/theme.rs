@@ -5,7 +5,7 @@
 //! in its rounded-card frame. The accent and the status colours stay gwm's
 //! (`claude-dark` preset, `src/tui/theme.rs` in gwm-cli), so both UIs read alike.
 
-use gpui::{Background, Hsla, Pixels, linear_color_stop, linear_gradient, px, rgb};
+use gpui::{Background, BoxShadow, Hsla, Pixels, linear_color_stop, linear_gradient, point, px, rgb};
 
 /// gwm's orange: the one token to change for another accent.
 pub const ACCENT: u32 = 0xd4825d;
@@ -30,6 +30,11 @@ const SHELL_ALPHA: f32 = 0.45;
 /// no background image: a plain gradient stands in for that fade.
 const CARD_SHADE_ALPHA: f32 = 0.22;
 
+/// Monocode frosts its popovers with a backdrop blur its patched GPUI paints
+/// (`popover.rs`). Without it, its opaque fallback: `floating_fill`, its chat
+/// surface off glass.
+const POPOVER: u32 = 0x141414;
+
 pub const UI_FONT: &str = ".SystemUIFont";
 pub const MONO_FONT: &str = "Menlo";
 
@@ -43,6 +48,10 @@ pub const CARD_RADIUS: Pixels = px(10.);
 pub const GUTTER: Pixels = px(6.);
 pub const TAB_HEIGHT: Pixels = px(27.);
 pub const TAB_MAX_WIDTH: Pixels = px(224.);
+/// Monocode's popover and its menu rows (`popover.rs`).
+pub const POPOVER_RADIUS: Pixels = px(12.);
+pub const MENU_ROW_HEIGHT: Pixels = px(28.);
+pub const MENU_ROW_RADIUS: Pixels = px(8.);
 
 pub fn ink(alpha: f32) -> Hsla {
   with_alpha(INK, alpha)
@@ -71,6 +80,27 @@ pub fn hover() -> Hsla {
 /// The selected row, the selected tab, a hovered icon button.
 pub fn selected() -> Hsla {
   ink(0.1)
+}
+
+pub fn popover() -> Hsla {
+  color(POPOVER)
+}
+
+/// The popover's border: ink at 10%, as Monocode's.
+pub fn popover_border() -> Hsla {
+  ink(0.1)
+}
+
+/// Monocode's two-layer popover shadow: black at 10% (`0x0000001a`), twice.
+pub fn popover_shadow() -> Vec<BoxShadow> {
+  let shadow = |y: f32, blur: f32, spread: f32| BoxShadow {
+    color: with_alpha(0x000000, 0.1),
+    offset: point(px(0.), px(y)),
+    blur_radius: px(blur),
+    spread_radius: px(spread),
+    inset: false,
+  };
+  vec![shadow(20., 25., -5.), shadow(8., 10., -6.)]
 }
 
 pub fn accent() -> Hsla {

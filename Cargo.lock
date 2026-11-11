@@ -2231,6 +2231,7 @@ dependencies = [
  "gwm-client",
  "libc",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

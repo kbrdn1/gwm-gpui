@@ -3,7 +3,7 @@
 A native desktop app for [gwm](https://github.com/kbrdn1/gwm-cli), the git worktree manager, built on [GPUI](https://www.gpui.rs).
 
 > [!NOTE]
-> Early, macOS only. A glass window, after [Monocode Native](https://github.com/hardbeat920/monocode)'s, that shows the worktrees of a repo, kept live through gwm's daemon: a sidebar of worktrees grouped by branch age, and the selected one's details. Read only for now.
+> Early, macOS only. A glass window, after [Monocode Native](https://github.com/hardbeat920/monocode)'s, that shows the worktrees of a repo, kept live through gwm's daemon: a sidebar of worktrees grouped by branch age, and the selected one's details, from where it opens in an editor or a terminal, or is removed.
 
 ## Requirements
 
@@ -29,7 +29,7 @@ It is a release build: GPUI compiles again, and takes several GB under `target/`
 
 A Finder launch gets launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), without `gwm` or Homebrew. When `gwm` is not on the `PATH` it was given, the app asks your login shell (`$SHELL -l -i`, so `.zprofile` and `.zshrc`) for its own, and gives up after 5 seconds. The daemon it starts inherits it.
 
-Up and down move the selection; a click selects a worktree. The title bar's sidebar button hides the sidebar.
+Up and down move the selection; a click selects a worktree. The title bar's sidebar button hides the sidebar. In the selected worktree's card, "Open in…" lists the editors and terminals installed in `/Applications`, `~/Applications` and the system's Utilities, and "Remove…" removes the worktree through gwm, keeping its branch, once you confirm.
 
 ## How it talks to gwm
 
@@ -39,7 +39,8 @@ gwm stays the source of truth: this app holds no worktree logic. It is one more 
 |---|---|
 | Read the worktree list | the daemon's JSON-RPC 2.0, `gwm list --format=json` when no daemon can be had |
 | Live updates | the daemon's `subscribe` → `worktrees.changed`, refused unless `params.schema_version` is the one this build reads |
-| Change (`create`, `remove`, `review`) | a `gwm` subprocess (planned) |
+| Remove a worktree | `gwm remove <name>`, a subprocess, once a fresh `gwm list --format=json` shows that name alone on the selected path: gwm removes by pattern and falls back to a substring match, it has no remove by path |
+| Create, review | a `gwm` subprocess (planned) |
 
 ### Live updates
 

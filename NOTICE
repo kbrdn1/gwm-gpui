@@ -19,6 +19,11 @@ assets/icons/LICENSE-MONOCODE):
   (crates/monocode-core/src/time.rs, shell/sidebar_list.rs);
 - src/workspace.rs lays out its rounded-card frame, and paints the card's
   corners as its off-macOS fallback does (shell/layout.rs);
+- src/apps.rs takes its list of editors and finds them as it does, by their
+  .app bundle, the user's Applications first, opened with /usr/bin/open -a
+  (crates/monocode-core/src/external_editor.rs);
+- src/open_menu.rs and src/theme.rs take its popover's radius, border, shadow,
+  opaque fallback fill and row metrics (popover.rs, theme.rs floating_fill);
 - src/login_shell.rs reimplements its login shell PATH probe: a login,
   interactive shell, a timeout, its process group killed past it
   (crates/monocode-core/src/scm/shell.rs).

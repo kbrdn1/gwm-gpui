@@ -82,7 +82,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut workspace = match worktrees {
           Some(worktrees) => {
             let source = Source::Once("rendered off screen by examples/screenshot.rs".to_owned());
-            Workspace::showing(worktrees, source, cx)
+            Workspace::showing(repo, worktrees, source, cx)
           }
           None => Workspace::new(repo, spawned, cx),
         };
