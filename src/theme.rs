@@ -107,6 +107,11 @@ pub fn accent() -> Hsla {
   rgb(ACCENT).into()
 }
 
+/// Selected text in a field: the accent, faint enough to read the text through.
+pub fn text_selection() -> Hsla {
+  with_alpha(ACCENT, 0.3)
+}
+
 pub fn color(hex: u32) -> Hsla {
   rgb(hex).into()
 }

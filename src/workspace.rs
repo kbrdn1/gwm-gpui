@@ -9,17 +9,18 @@ use gpui::{
   Window, actions, canvas, div, point, prelude::*, px,
 };
 use gwm_client::{
-  Worktree,
+  Create, Worktree,
   watch::{self, Event, Sockets, Source, Spawned},
 };
 
 use crate::{
   age,
   apps::{self, Installed},
+  create_form::{self, Form, Mode},
   detail, sidebar, status_bar, theme, title_bar,
 };
 
-actions!(workspace, [SelectNext, SelectPrevious]);
+actions!(workspace, [SelectNext, SelectPrevious, CloseForm]);
 
 /// What is under way on a worktree, or came of the last action on it, shown
 /// in its card.
@@ -60,6 +61,17 @@ pub(crate) struct State {
   /// The root of the worktree the app was opened in, as git names it
   /// (canonical): gwm and its daemon run there, so it is not removed.
   pub opened_in: Option<PathBuf>,
+  /// The `gwm create` under way, one at a time, with the paths listed when it
+  /// started.
+  creating: Option<(Create, Vec<PathBuf>)>,
+  /// The user picked a worktree while gwm ran: the created one does not take
+  /// the selection when gwm returns.
+  picked_while_creating: bool,
+  /// A creation gwm finished, whose worktree is selected once a list shows it.
+  to_select: Option<(Create, Vec<PathBuf>)>,
+  /// The last creation's error, in gwm's words, until the next one or the
+  /// form is closed.
+  create_error: Option<String>,
 }
 
 impl State {
@@ -73,6 +85,10 @@ impl State {
       failed: None,
       removal_error: None,
       opened_in: None,
+      creating: None,
+      picked_while_creating: false,
+      to_select: None,
+      create_error: None,
     }
   }
 
@@ -90,6 +106,7 @@ impl State {
         }
         self.listing = Listing::Ready(worktrees);
         self.received_at = age::now();
+        self.select_created();
       }
       Event::Source(source) => self.source = Some(source),
       Event::Failed(error) => {
@@ -131,7 +148,67 @@ impl State {
       .unwrap_or(0)
       .saturating_add_signed(delta)
       .min(last);
-    self.selected = Some(worktrees[order[position]].path.clone());
+    self.select(worktrees[order[position]].path.clone());
+  }
+
+  /// The user picks a worktree: a created one no longer takes the selection.
+  fn select(&mut self, path: PathBuf) {
+    self.selected = Some(path);
+    self.to_select = None;
+    self.picked_while_creating = self.creating.is_some();
+  }
+
+  /// Whether a creation can start: once a list is shown, which tells the new
+  /// worktree from those already there.
+  pub fn can_create(&self) -> bool {
+    matches!(self.listing, Listing::Ready(_))
+  }
+
+  /// Starts `gwm create`, unless one is already under way or there is no list.
+  fn begin_create(&mut self, request: Create) -> bool {
+    if self.creating.is_some() || !self.can_create() {
+      return false;
+    }
+    let known = self.worktrees().iter().map(|worktree| worktree.path.clone()).collect();
+    self.creating = Some((request, known));
+    self.picked_while_creating = false;
+    self.create_error = None;
+    true
+  }
+
+  /// gwm returned. Its worktree is selected from a list, this one or the next,
+  /// not from what gwm printed. A failure keeps gwm's words.
+  fn end_create(&mut self, result: Result<(), String>) {
+    let creating = self.creating.take();
+    match result {
+      Ok(()) => {
+        self.to_select = creating.filter(|_| !self.picked_while_creating);
+        self.select_created();
+      }
+      Err(error) => self.create_error = Some(error),
+    }
+  }
+
+  fn select_created(&mut self) {
+    let Some((request, known)) = &self.to_select else {
+      return;
+    };
+    if let Some(created) = request.created(self.worktrees(), known) {
+      self.selected = Some(created.path.clone());
+      self.to_select = None;
+    }
+  }
+
+  pub fn creating(&self) -> bool {
+    self.creating.is_some()
+  }
+
+  pub fn create_error(&self) -> Option<&str> {
+    self.create_error.as_deref()
+  }
+
+  pub(crate) fn dismiss_create_error(&mut self) {
+    self.create_error = None;
   }
 
   pub fn activity(&self, path: &std::path::Path) -> Option<Activity<'_>> {
@@ -274,6 +351,9 @@ pub struct Workspace {
   /// The editors and terminals found, `None` while they are looked for.
   apps: Option<Vec<Installed>>,
   menu_open: bool,
+  /// The "New worktree" form, in place of the card while open.
+  form: Form,
+  form_open: bool,
   sidebar_scroll: ScrollHandle,
   focus: FocusHandle,
 }
@@ -294,7 +374,12 @@ impl Workspace {
     cx.spawn(async move |this, cx| {
       while let Ok(event) = received.recv().await {
         let applied = this.update(cx, |workspace, cx| {
+          let before = workspace.state.selected.clone();
           workspace.state.apply(event);
+          // A created worktree, once listed, takes the selection.
+          if workspace.state.selected != before {
+            workspace.reveal_selection();
+          }
           cx.notify();
         });
         if applied.is_err() {
@@ -344,6 +429,8 @@ impl Workspace {
       repo,
       apps: None,
       menu_open: false,
+      form: Form::new(cx),
+      form_open: false,
       sidebar_scroll: ScrollHandle::new(),
       focus: cx.focus_handle(),
     }
@@ -374,8 +461,12 @@ impl Workspace {
     }
   }
 
-  pub(crate) fn select(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-    self.state.selected = Some(path);
+  /// A click on a sidebar row: the user moves on, and the form closes.
+  pub(crate) fn select(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    self.state.select(path);
+    if self.form_open {
+      self.close_form(window, cx);
+    }
     cx.notify();
   }
 
@@ -465,7 +556,117 @@ impl Workspace {
     .detach();
   }
 
+  pub(crate) fn toggle_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.form_open {
+      self.close_form(window, cx);
+      return;
+    }
+    self.form_open = true;
+    self.menu_open = false;
+    self.focus_field(0, window, cx);
+    cx.notify();
+  }
+
+  /// Hides the form: a creation under way runs on. Its error, or the last
+  /// one, goes: the user moved on.
+  pub(crate) fn close_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.form_open = false;
+    self.form.invalid = None;
+    self.state.dismiss_create_error();
+    window.focus(&self.focus, cx);
+    cx.notify();
+  }
+
+  pub(crate) fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+    self.form.mode = mode;
+    self.form.invalid = None;
+    self.focus_field(0, window, cx);
+    cx.notify();
+  }
+
+  /// Tab: the mode's next field, back to the first after the last.
+  pub(crate) fn next_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let fields = self.form.focus_handles(cx);
+    let next = fields
+      .iter()
+      .position(|field| field.is_focused(window))
+      .map_or(0, |focused| focused + 1);
+    self.focus_field(next % fields.len().max(1), window, cx);
+  }
+
+  fn focus_field(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(field) = self.form.focus_handles(cx).get(index) {
+      window.focus(field, cx);
+    }
+  }
+
+  /// Creates the form's worktree through gwm, off the UI thread. Done, the
+  /// form closes and the worktree is selected once a list shows it; refused,
+  /// the form shows gwm's words, reopened if it was closed meanwhile.
+  pub(crate) fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.state.creating() {
+      return;
+    }
+    let request = match self.form.request(cx) {
+      Ok(request) => request,
+      Err(invalid) => {
+        self.form.invalid = Some(invalid);
+        cx.notify();
+        return;
+      }
+    };
+    self.form.invalid = None;
+    if !self.state.begin_create(request.clone()) {
+      self.form.invalid =
+        Some("Wait for the worktree list: without it, the new worktree cannot be told from an older one.".to_owned());
+      cx.notify();
+      return;
+    }
+    let relist = matches!(self.state.source, Some(Source::Once(_)));
+    let repo = self.repo.clone();
+    cx.notify();
+    cx.spawn_in(window, async move |this, cx| {
+      let (created, listed) = cx
+        .background_spawn(async move {
+          let created = gwm_client::create(&repo, &request);
+          let listed = relist.then(|| gwm_client::list(&repo));
+          (created, listed)
+        })
+        .await;
+      let _ = this.update_in(cx, |workspace, window, cx| {
+        let succeeded = created.is_ok();
+        let before = workspace.state.selected.clone();
+        workspace.state.end_create(created);
+        match listed {
+          Some(Ok(worktrees)) => workspace.state.apply(Event::Snapshot(worktrees)),
+          Some(Err(error)) => workspace.state.apply(Event::Failed(error)),
+          None => {}
+        }
+        if succeeded {
+          workspace.form.clear(cx);
+          if workspace.form_open {
+            workspace.form_open = false;
+            window.focus(&workspace.focus, cx);
+          }
+        } else if !workspace.form_open {
+          workspace.form_open = true;
+          workspace.focus_field(0, window, cx);
+        }
+        if workspace.state.selected != before {
+          workspace.reveal_selection();
+        }
+        cx.notify();
+      });
+    })
+    .detach();
+  }
+
   fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
+    // The selection is behind the form: moving it unseen would cancel a
+    // created worktree's selection for nothing.
+    if self.form_open {
+      return;
+    }
     self.state.step(delta);
     self.reveal_selection();
     cx.notify();
@@ -486,6 +687,9 @@ impl Render for Workspace {
     // the window waiting to swallow a click.
     let mut menu_shown = false;
     let card = match &self.state.listing {
+      _ if self.form_open => {
+        create_form::create_form(&self.form, self.state.creating(), self.state.create_error(), cx).into_any_element()
+      }
       Listing::Loading => message("Loading worktrees…", theme::ink(0.5)).into_any_element(),
       Listing::Failed(error) => message(error, theme::color(theme::ERROR)).into_any_element(),
       Listing::Ready(_) => match selected {
@@ -509,6 +713,11 @@ impl Render for Workspace {
       .key_context("Workspace")
       .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.step(1, cx)))
       .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.step(-1, cx)))
+      .on_action(cx.listener(|this, _: &CloseForm, window, cx| {
+        if this.form_open {
+          this.close_form(window, cx);
+        }
+      }))
       .size_full()
       .relative()
       .flex()
@@ -517,7 +726,12 @@ impl Render for Workspace {
       .font_family(theme::UI_FONT)
       .text_size(px(13.))
       .text_color(theme::ink(1.))
-      .child(title_bar::title_bar(self.sidebar_open, selected, cx))
+      .child(title_bar::title_bar(
+        self.sidebar_open,
+        self.state.can_create(),
+        selected,
+        cx,
+      ))
       .child(
         // As in Monocode, the sidebar runs down to the window's bottom edge, and
         // the status bar sits under the card's column only.
@@ -857,6 +1071,107 @@ pub(crate) mod tests {
     assert_eq!(level, PromptLevel::Critical);
     assert!(detail.contains("uncommitted changes: they will be lost"), "{detail}");
     assert!(detail.contains("gwm undo does not bring them back"), "{detail}");
+  }
+
+  /// `demo()` and a second worktree for an issue another one already has.
+  fn with_issue(id: &str, issue: u64) -> Worktree {
+    let mut worktree = worktree(id, false, Some(0));
+    worktree.issue = Some(issue);
+    worktree
+  }
+
+  /// gwm makes the worktree, then bootstraps it: the daemon can list it before
+  /// gwm returns. It is selected once gwm returned, and only the new one.
+  #[test]
+  fn a_created_worktree_is_selected_once_gwm_returned_and_a_list_shows_it() {
+    let mut state = State::new(Listing::Ready(vec![with_issue("feat-42-old", 42)]), None);
+    assert!(state.begin_create(Create::triple("feat", "42", "new").unwrap()));
+    state.end_create(Ok(()));
+    assert_eq!(state.selected, None);
+    state.apply(Event::Snapshot(vec![
+      with_issue("feat-42-old", 42),
+      with_issue("feat-42-new", 42),
+    ]));
+    assert_eq!(state.selected, Some(PathBuf::from("/feat-42-new")));
+
+    // Listed while gwm still runs: selected when it returns.
+    assert!(state.begin_create(Create::name("spike").unwrap()));
+    let mut listed = state.worktrees().to_vec();
+    listed.push(worktree("spike", false, Some(0)));
+    state.apply(Event::Snapshot(listed));
+    assert_eq!(state.selected, Some(PathBuf::from("/feat-42-new")));
+    state.end_create(Ok(()));
+    assert_eq!(state.selected, Some(PathBuf::from("/spike")));
+  }
+
+  /// `gwm create --issue 57` with a worktree for #57: gwm prints it and exits 0.
+  #[test]
+  fn from_an_issue_that_has_a_worktree_it_is_selected() {
+    let mut state = State::new(
+      Listing::Ready(vec![with_issue("fix-57", 57), with_issue("docs-71", 71)]),
+      None,
+    );
+    assert!(state.begin_create(Create::issue("57", "").unwrap()));
+    state.end_create(Ok(()));
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+    assert_eq!(state.to_select, None);
+  }
+
+  #[test]
+  fn one_create_at_a_time_and_a_failure_keeps_gwms_words() {
+    let mut state = state(None);
+    assert!(state.begin_create(Create::triple("nope", "3", "x").unwrap()));
+    assert!(state.creating());
+    assert!(!state.begin_create(Create::name("spike").unwrap()));
+    state.end_create(Err("error: invalid branch type 'nope'".to_owned()));
+    assert!(!state.creating());
+    assert_eq!(state.create_error(), Some("error: invalid branch type 'nope'"));
+    // Nothing is selected from a failed creation, even if a list shows a match.
+    state.apply(Event::Snapshot(vec![with_issue("nope-3-x", 3)]));
+    assert_eq!(state.selected, None);
+    assert_eq!(state.create_error(), Some("error: invalid branch type 'nope'"));
+    assert!(state.begin_create(Create::name("spike").unwrap()));
+    assert_eq!(state.create_error(), None);
+  }
+
+  /// Without a list, nothing tells the new worktree from an older one of the
+  /// same issue: no creation before the first snapshot, nor after a failure.
+  #[test]
+  fn no_create_before_the_list_is_ready() {
+    for listing in [Listing::Loading, Listing::Failed("gwm list failed".to_owned())] {
+      let mut state = State::new(listing, None);
+      assert!(!state.can_create());
+      assert!(!state.begin_create(Create::issue("42", "").unwrap()));
+      assert!(!state.creating());
+    }
+    assert!(state(None).can_create());
+  }
+
+  /// The user picks a worktree while gwm still runs: gwm's return does not take
+  /// the selection back.
+  #[test]
+  fn a_selection_made_while_gwm_runs_is_not_taken_back() {
+    let mut state = state(None);
+    assert!(state.begin_create(Create::name("spike").unwrap()));
+    state.select(PathBuf::from("/docs-71"));
+    state.end_create(Ok(()));
+    let mut listed = demo();
+    listed.push(worktree("spike", false, Some(0)));
+    state.apply(Event::Snapshot(listed));
+    assert_eq!(state.selected().unwrap().id, "docs-71");
+  }
+
+  /// The user moved on before the list showed the new worktree.
+  #[test]
+  fn a_selection_by_the_user_is_not_taken_back() {
+    let mut state = state(None);
+    assert!(state.begin_create(Create::name("spike").unwrap()));
+    state.end_create(Ok(()));
+    state.step(1);
+    let mut listed = demo();
+    listed.push(worktree("spike", false, Some(0)));
+    state.apply(Event::Snapshot(listed));
+    assert_eq!(state.selected().unwrap().id, "docs-71");
   }
 
   #[test]

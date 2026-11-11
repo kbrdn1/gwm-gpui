@@ -176,21 +176,21 @@ fn action_row(worktree: &Worktree, actions: Actions, cx: &mut Context<Workspace>
     }))
 }
 
-fn error_text(error: String) -> gpui::Div {
+pub(crate) fn error_text(error: String) -> gpui::Div {
   div()
     .text_size(px(12.))
     .text_color(theme::color(theme::ERROR))
     .child(error)
 }
 
-fn button(id: &'static str, label: &'static str, color: Hsla) -> gpui::Stateful<gpui::Div> {
+pub(crate) fn button(id: &'static str, label: &'static str, color: Hsla) -> gpui::Stateful<gpui::Div> {
   pill(label, color)
     .id(id)
     .cursor_pointer()
     .hover(|button| button.bg(theme::selected()))
 }
 
-fn pill(label: &'static str, color: Hsla) -> gpui::Div {
+pub(crate) fn pill(label: &'static str, color: Hsla) -> gpui::Div {
   div()
     .h(px(28.))
     .px(px(10.))

@@ -11,6 +11,9 @@
 //!   --live <ms>       follow the repo live, as the app does, for <ms> before rendering
 //! ```
 //!
+//! `--keys` and `--click` repeat, and apply in the order given: `--click` on a
+//! field, then `--keys "4 2"` types into it.
+//!
 //! Without `--live`, the worktrees are read once with `gwm list`. The window's
 //! blur comes from the window server, not from GPUI, so it is not in the
 //! image: translucent surfaces come out translucent, over nothing.
@@ -26,12 +29,16 @@ use gpui::{AppContext, Bounds, Focusable, Modifiers, VisualTestAppContext, Windo
 use gwm_client::watch::{Source, Spawned};
 use gwm_gpui::{Workspace, assets::Assets};
 
+enum Step {
+  Keys(String),
+  Click(f32, f32),
+}
+
 #[derive(Default)]
 struct Options {
   row: usize,
   no_sidebar: bool,
-  keys: Option<String>,
-  click: Option<(f32, f32)>,
+  steps: Vec<Step>,
   live: Option<u64>,
 }
 
@@ -47,11 +54,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     match arg.as_str() {
       "--row" => options.row = value()?.parse()?,
       "--no-sidebar" => options.no_sidebar = true,
-      "--keys" => options.keys = Some(value()?),
+      "--keys" => options.steps.push(Step::Keys(value()?)),
       "--click" => {
         let value = value()?;
         let (x, y) = value.split_once(',').ok_or(usage)?;
-        options.click = Some((x.parse()?, y.parse()?));
+        options.steps.push(Step::Click(x.parse()?, y.parse()?));
       }
       "--live" => options.live = Some(value()?.parse()?),
       _ => return Err(usage.into()),
@@ -104,12 +111,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
   }
   cx.run_until_parked();
-  if let Some(keys) = &options.keys {
-    cx.simulate_keystrokes(window.into(), keys);
-    cx.run_until_parked();
-  }
-  if let Some((x, y)) = options.click {
-    cx.simulate_click(window.into(), point(px(x), px(y)), Modifiers::default());
+  for step in &options.steps {
+    match step {
+      Step::Keys(keys) => cx.simulate_keystrokes(window.into(), keys),
+      Step::Click(x, y) => cx.simulate_click(window.into(), point(px(*x), px(*y)), Modifiers::default()),
+    }
     cx.run_until_parked();
   }
   let image = cx.capture_screenshot(window.into());

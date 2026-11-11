@@ -29,6 +29,12 @@ fn isolate() {
     unsafe {
       std::env::set_var("GWM_HISTORY_FILE", scratch.join("history.toml"));
       std::env::set_var("GWM_TRUST_LEDGER", scratch.join("trust-ledger.toml"));
+      // gwm takes it for `--allow-bootstrap`. Set here, whatever the user's
+      // shell exports: the client must strip it, and the trust tests prove it.
+      std::env::set_var("GWM_ALLOW_BOOTSTRAP", "1");
+      // No `~/.config/gwm/config.toml`: its base, its hooks stay out of the
+      // tests, on this machine as on CI.
+      std::env::set_var("GWM_NO_GLOBAL_CONFIG", "1");
     }
   });
 }
@@ -159,7 +165,8 @@ fn refuses_the_main_worktree() {
 }
 
 /// A `pre_remove` hook from a `.gwm.toml` no one approved: gwm refuses, as it
-/// should with no one to ask, and its own words reach the user.
+/// should with no one to ask, and its own words reach the user, with
+/// `GWM_ALLOW_BOOTSTRAP=1` in the environment (see [`isolate`]).
 #[test]
 fn a_refusal_from_gwm_comes_back_as_gwm_wrote_it() {
   isolate();

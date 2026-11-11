@@ -6,8 +6,11 @@
 //! the contract adds optional fields without a version bump, and asks consumers
 //! to ignore the ones they don't know.
 
+mod create;
 pub mod daemon;
 pub mod watch;
+
+pub use create::{Create, Number, create};
 
 use std::{
   ffi::OsStr,
@@ -123,10 +126,9 @@ pub fn remove(repo: &Path, selected: &Path, confirmed_dirty: bool) -> Result<(),
   let opened_in = Repo::locate(repo).ok().map(|repo| repo.toplevel);
   let fresh = list(repo)?;
   let name = removable(&fresh, selected, opened_in.as_deref(), confirmed_dirty)?;
-  let output = Command::new("gwm")
+  let output = writing_gwm()
     .args(["remove", "--", name])
     .current_dir(repo)
-    .stdin(Stdio::null())
     .output()
     .map_err(|error| format!("could not run gwm: {error}"))?;
   if !output.status.success() {
@@ -180,6 +182,19 @@ fn removable<'a>(
     ));
   }
   Ok(name)
+}
+
+/// `gwm` for a command that writes and may run `.gwm.toml`'s hooks or
+/// bootstrap. Stdin closed: gwm refuses what no one approved instead of
+/// asking on the terminal the app was launched from. `GWM_ALLOW_BOOTSTRAP`
+/// removed: gwm takes it for `--allow-bootstrap`, which the app never passes,
+/// and an export in the user's shell would otherwise reach gwm through the app.
+/// The daemon is not spawned through this: its methods (`list`, `doctor`,
+/// `path`, `subscribe`) read, and run neither hooks nor bootstrap.
+fn writing_gwm() -> Command {
+  let mut gwm = Command::new("gwm");
+  gwm.stdin(Stdio::null()).env_remove("GWM_ALLOW_BOOTSTRAP");
+  gwm
 }
 
 fn parse(json: &[u8]) -> Result<Vec<Worktree>, String> {

@@ -4,11 +4,13 @@
 mod age;
 mod apps;
 pub mod assets;
+mod create_form;
 mod detail;
 pub mod login_shell;
 mod open_menu;
 mod sidebar;
 mod status_bar;
+mod text_input;
 pub mod theme;
 mod title_bar;
 pub mod workspace;
@@ -42,8 +44,25 @@ pub fn window_options(cx: &App) -> WindowOptions {
 }
 
 pub fn bind_keys(cx: &mut App) {
+  use text_input::{Backspace, Delete, End, Home, Left, Paste, Right, SelectAll};
   cx.bind_keys([
     KeyBinding::new("down", workspace::SelectNext, Some("Workspace")),
     KeyBinding::new("up", workspace::SelectPrevious, Some("Workspace")),
+    KeyBinding::new("escape", workspace::CloseForm, Some("Workspace")),
+    KeyBinding::new("enter", create_form::Submit, Some("CreateForm")),
+    KeyBinding::new("tab", create_form::NextField, Some("CreateForm")),
+    KeyBinding::new("backspace", Backspace, Some("TextInput")),
+    KeyBinding::new("delete", Delete, Some("TextInput")),
+    KeyBinding::new("left", Left, Some("TextInput")),
+    KeyBinding::new("right", Right, Some("TextInput")),
+    KeyBinding::new("home", Home, Some("TextInput")),
+    KeyBinding::new("end", End, Some("TextInput")),
+    KeyBinding::new("cmd-left", Home, Some("TextInput")),
+    KeyBinding::new("cmd-right", End, Some("TextInput")),
+    // A one-line field, as macOS has it: and the sidebar's up and down stay out.
+    KeyBinding::new("up", Home, Some("TextInput")),
+    KeyBinding::new("down", End, Some("TextInput")),
+    KeyBinding::new("cmd-a", SelectAll, Some("TextInput")),
+    KeyBinding::new("cmd-v", Paste, Some("TextInput")),
   ]);
 }
