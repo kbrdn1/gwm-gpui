@@ -153,9 +153,15 @@ impl State {
     self.to_select = None;
   }
 
-  /// Starts `gwm create`, unless one is already under way.
+  /// Whether a creation can start: once a list is shown, which tells the new
+  /// worktree from those already there.
+  pub fn can_create(&self) -> bool {
+    matches!(self.listing, Listing::Ready(_))
+  }
+
+  /// Starts `gwm create`, unless one is already under way or there is no list.
   fn begin_create(&mut self, request: Create) -> bool {
-    if self.creating.is_some() {
+    if self.creating.is_some() || !self.can_create() {
       return false;
     }
     let known = self.worktrees().iter().map(|worktree| worktree.path.clone()).collect();
@@ -605,6 +611,9 @@ impl Workspace {
     };
     self.form.invalid = None;
     if !self.state.begin_create(request.clone()) {
+      self.form.invalid =
+        Some("Wait for the worktree list: without it, the new worktree cannot be told from an older one.".to_owned());
+      cx.notify();
       return;
     }
     let relist = matches!(self.state.source, Some(Source::Once(_)));
@@ -711,7 +720,12 @@ impl Render for Workspace {
       .font_family(theme::UI_FONT)
       .text_size(px(13.))
       .text_color(theme::ink(1.))
-      .child(title_bar::title_bar(self.sidebar_open, selected, cx))
+      .child(title_bar::title_bar(
+        self.sidebar_open,
+        self.state.can_create(),
+        selected,
+        cx,
+      ))
       .child(
         // As in Monocode, the sidebar runs down to the window's bottom edge, and
         // the status bar sits under the card's column only.
@@ -1112,6 +1126,19 @@ pub(crate) mod tests {
     assert_eq!(state.create_error(), Some("error: invalid branch type 'nope'"));
     assert!(state.begin_create(Create::name("spike").unwrap()));
     assert_eq!(state.create_error(), None);
+  }
+
+  /// Without a list, nothing tells the new worktree from an older one of the
+  /// same issue: no creation before the first snapshot, nor after a failure.
+  #[test]
+  fn no_create_before_the_list_is_ready() {
+    for listing in [Listing::Loading, Listing::Failed("gwm list failed".to_owned())] {
+      let mut state = State::new(listing, None);
+      assert!(!state.can_create());
+      assert!(!state.begin_create(Create::issue("42", "").unwrap()));
+      assert!(!state.creating());
+    }
+    assert!(state(None).can_create());
   }
 
   /// The user moved on before the list showed the new worktree.

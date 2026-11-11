@@ -20,6 +20,7 @@ const CLOSED_NAV_WIDTH: Pixels = px(150.);
 
 pub(crate) fn title_bar(
   sidebar_open: bool,
+  can_create: bool,
   selected: Option<&Worktree>,
   cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
@@ -54,21 +55,24 @@ pub(crate) fn title_bar(
             .on_click(cx.listener(|workspace, _, _, cx| workspace.toggle_sidebar(cx)))
             .child(icon(assets::SIDEBAR, 14., theme::ink(0.5))),
         )
-        .child(
-          div()
-            .id("new-worktree")
-            .size(px(24.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(6.))
-            .hover(|button| button.bg(theme::selected()))
-            .text_size(px(17.))
-            .text_color(theme::ink(0.5))
-            .on_click(cx.listener(|workspace, _, window, cx| workspace.toggle_form(window, cx)))
-            .child("+"),
-        )
+        // No list yet, no "New worktree": nothing would tell the new one apart.
+        .when(can_create, |nav| {
+          nav.child(
+            div()
+              .id("new-worktree")
+              .size(px(24.))
+              .flex_none()
+              .flex()
+              .items_center()
+              .justify_center()
+              .rounded(px(6.))
+              .hover(|button| button.bg(theme::selected()))
+              .text_size(px(17.))
+              .text_color(theme::ink(0.5))
+              .on_click(cx.listener(|workspace, _, window, cx| workspace.toggle_form(window, cx)))
+              .child("+"),
+          )
+        })
         .child(drag_area().flex_1()),
     )
     .child(
