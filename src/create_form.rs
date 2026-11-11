@@ -26,8 +26,8 @@ const MODES: [(Mode, &str, &str); 3] = [
   (
     Mode::Issue,
     "From an issue",
-    "gwm reads the type and the description from the issue, through gh. A worktree that already has the issue is \
-     selected.",
+    "gwm reads the description from the issue through the forge's CLI (gh or glab), and the type from its labels \
+     when .gwm.toml maps them; otherwise give the type. A worktree that already has the issue is selected.",
   ),
   (
     Mode::Triple,
@@ -64,7 +64,7 @@ impl Form {
   /// The mode's fields, top to bottom, with their labels.
   fn fields(&self) -> Vec<(&'static str, &Entity<TextInput>)> {
     match self.mode {
-      Mode::Issue => vec![("Issue", &self.issue)],
+      Mode::Issue => vec![("Issue", &self.issue), ("Type (optional)", &self.kind)],
       Mode::Triple => vec![
         ("Type", &self.kind),
         ("Issue", &self.issue),
@@ -85,7 +85,7 @@ impl Form {
   pub fn request(&self, cx: &App) -> Result<Create, String> {
     let text = |field: &Entity<TextInput>| field.read(cx).text().to_owned();
     match self.mode {
-      Mode::Issue => Create::issue(&text(&self.issue)),
+      Mode::Issue => Create::issue(&text(&self.issue), &text(&self.kind)),
       Mode::Triple => Create::triple(&text(&self.kind), &text(&self.issue), &text(&self.desc)),
       Mode::Name => Create::name(&text(&self.name)),
     }

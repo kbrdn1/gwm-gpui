@@ -10,9 +10,12 @@ use crate::Worktree;
 /// rest (a type gwm does not know, a name git refuses) is gwm's to say.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Create {
-  /// `gwm create --issue <N>`: gwm reads the type and description from the
-  /// issue on the forge. A worktree that already carries the number is kept.
-  Issue(Number),
+  /// `gwm create --issue <N> [--type <TYPE>]`: gwm reads the description,
+  /// and the type unless one is given, from the issue on the forge. The type
+  /// comes from the issue's labels only through `[issue_template.by_type.*]
+  /// .labels`: without that map, the default, gwm asks for `--type`. A
+  /// worktree that already carries the number is kept.
+  Issue { issue: Number, kind: Option<String> },
   /// `gwm create <type> <issue> <desc>`.
   Triple { kind: String, issue: Number, desc: String },
   /// `gwm create --name <name>`: the name is the branch, verbatim.
@@ -56,8 +59,13 @@ fn required(what: &str, text: &str) -> Result<String, String> {
 }
 
 impl Create {
-  pub fn issue(issue: &str) -> Result<Self, String> {
-    Ok(Self::Issue(Number::parse(issue)?))
+  /// `kind`: the type, empty for the one the issue's labels select.
+  pub fn issue(issue: &str, kind: &str) -> Result<Self, String> {
+    let kind = kind.trim();
+    Ok(Self::Issue {
+      issue: Number::parse(issue)?,
+      kind: (!kind.is_empty()).then(|| kind.to_owned()),
+    })
   }
 
   pub fn triple(kind: &str, issue: &str, desc: &str) -> Result<Self, String> {
@@ -76,7 +84,11 @@ impl Create {
   /// is never read as a flag, whatever it starts with.
   pub fn args(&self) -> Vec<String> {
     match self {
-      Self::Issue(issue) => vec![format!("--issue={}", issue.typed)],
+      Self::Issue { issue, kind } => {
+        let mut args = vec![format!("--issue={}", issue.typed)];
+        args.extend(kind.iter().map(|kind| format!("--type={kind}")));
+        args
+      }
       Self::Triple { kind, issue, desc } => vec!["--".to_owned(), kind.clone(), issue.typed.clone(), desc.clone()],
       Self::Name(name) => vec![format!("--name={name}")],
     }
@@ -89,12 +101,12 @@ impl Create {
   pub fn created<'a>(&self, worktrees: &'a [Worktree], known: &[PathBuf]) -> Option<&'a Worktree> {
     let is_new = |worktree: &&Worktree| !known.contains(&worktree.path);
     let matches = |worktree: &&Worktree| match self {
-      Self::Issue(issue) | Self::Triple { issue, .. } => worktree.issue == Some(issue.value),
+      Self::Issue { issue, .. } | Self::Triple { issue, .. } => worktree.issue == Some(issue.value),
       Self::Name(name) => worktree.branch.as_deref() == Some(name.as_str()),
     };
     let fresh = worktrees.iter().filter(matches).find(is_new);
     match self {
-      Self::Issue(_) => fresh.or_else(|| worktrees.iter().find(matches)),
+      Self::Issue { .. } => fresh.or_else(|| worktrees.iter().find(matches)),
       Self::Triple { .. } | Self::Name(_) => fresh,
     }
   }
@@ -223,7 +235,11 @@ mod tests {
 
   #[test]
   fn each_mode_builds_its_own_arguments() {
-    assert_eq!(Create::issue(" 594 ").unwrap().args(), ["--issue=594"]);
+    assert_eq!(Create::issue(" 594 ", " ").unwrap().args(), ["--issue=594"]);
+    assert_eq!(
+      Create::issue("594", " fix ").unwrap().args(),
+      ["--issue=594", "--type=fix"]
+    );
     assert_eq!(
       Create::triple("feat", "42", "Add login").unwrap().args(),
       ["--", "feat", "42", "Add login"]
@@ -252,7 +268,7 @@ mod tests {
       "٤٢",
       "99999999999999999999999",
     ] {
-      assert!(Create::issue(typed).is_err(), "{typed:?} was taken");
+      assert!(Create::issue(typed, "").is_err(), "{typed:?} was taken");
     }
   }
 
@@ -287,10 +303,13 @@ mod tests {
   fn from_an_issue_an_existing_worktree_is_selected() {
     let worktrees = after_creates();
     let known: Vec<PathBuf> = worktrees.iter().map(|worktree| worktree.path.clone()).collect();
-    let issue = Create::issue("42").unwrap();
+    let issue = Create::issue("42", "").unwrap();
     assert!(issue.created(&worktrees, &known).is_some());
     assert_eq!(named(issue.created(&worktrees, &known[..2])), Some("feat-42-add-login"));
-    assert_eq!(named(Create::issue("43").unwrap().created(&worktrees, &known)), None);
+    assert_eq!(
+      named(Create::issue("43", "").unwrap().created(&worktrees, &known)),
+      None
+    );
   }
 
   /// The name is the branch: the directory, and gwm's `name`, lose the slash.

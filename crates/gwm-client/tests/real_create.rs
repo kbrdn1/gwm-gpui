@@ -109,7 +109,13 @@ fn a_refusal_from_gwm_comes_back_as_gwm_wrote_it() {
 
   let refused = gwm_client::create(&acme, &Create::triple("nope", "3", "x").unwrap()).unwrap_err();
   assert!(refused.starts_with("error: invalid branch type 'nope'"), "{refused}");
-  let refused = gwm_client::create(&acme, &Create::issue("5").unwrap()).unwrap_err();
+  let refused = gwm_client::create(&acme, &Create::issue("5", "").unwrap()).unwrap_err();
+  assert!(
+    refused.starts_with("error: ") && refused.contains("origin"),
+    "{refused}"
+  );
+  // `--type` is taken by gwm's parser: the refusal is the forge's, not the arguments'.
+  let refused = gwm_client::create(&acme, &Create::issue("5", "feat").unwrap()).unwrap_err();
   assert!(
     refused.starts_with("error: ") && refused.contains("origin"),
     "{refused}"

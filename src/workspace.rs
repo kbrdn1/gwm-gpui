@@ -1091,7 +1091,7 @@ pub(crate) mod tests {
       Listing::Ready(vec![with_issue("fix-57", 57), with_issue("docs-71", 71)]),
       None,
     );
-    assert!(state.begin_create(Create::issue("57").unwrap()));
+    assert!(state.begin_create(Create::issue("57", "").unwrap()));
     state.end_create(Ok(()));
     assert_eq!(state.selected().unwrap().id, "fix-57");
     assert_eq!(state.to_select, None);
