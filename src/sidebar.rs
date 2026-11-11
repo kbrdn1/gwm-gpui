@@ -1,4 +1,4 @@
-//! The sidebar: the repo, then its worktrees in dense rows, grouped the way
+//! The sidebar: the repo's project picker, then its worktrees in dense rows, grouped the way
 //! Monocode groups sessions (`shell/sidebar_list.rs`, `shell.rs` session rows).
 
 use std::path::Path;
@@ -8,7 +8,9 @@ use gwm_client::Worktree;
 
 use crate::{
   age::{Ages, Bucket},
-  assets, theme,
+  assets,
+  project_picker::ProjectPicker,
+  theme,
   workspace::{Place, Workspace, order, place},
 };
 
@@ -98,42 +100,11 @@ pub(crate) fn sidebar(
     .flex()
     .flex_col()
     .bg(theme::wash())
-    .children(main.map(header))
+    .children(main.map(|main| ProjectPicker {
+      name: main.name.clone(),
+      branch: main.branch.clone(),
+    }))
     .child(list)
-}
-
-/// The repo, where Monocode puts its project selector. Not a menu: gwm-gpui
-/// shows one repo per window.
-fn header(main: &Worktree) -> impl IntoElement {
-  div()
-    .h(px(39.))
-    .px(px(12.))
-    .pb(px(1.))
-    .flex()
-    .items_center()
-    .gap(px(8.))
-    .child(
-      div()
-        .size(px(20.))
-        .flex_none()
-        .rounded(px(5.))
-        .bg(theme::ink(0.08))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(icon(assets::FOLDER, 12., theme::ink(0.7))),
-    )
-    .child(
-      one_line(main.name.clone())
-        .text_size(px(13.))
-        .font_weight(FontWeight::SEMIBOLD),
-    )
-    .children(
-      main
-        .branch
-        .clone()
-        .map(|branch| one_line(branch).flex_shrink_0().text_color(theme::ink(0.45))),
-    )
 }
 
 fn section_title(title: &'static str) -> impl IntoElement {

@@ -8,11 +8,15 @@ use gpui::{AssetSource, Result, SharedString};
 pub const SIDEBAR: &str = "icons/sidebar.svg";
 pub const BRANCH: &str = "icons/git-branch.svg";
 pub const FOLDER: &str = "icons/folder-01.svg";
+pub const CHEVRON_DOWN: &str = "icons/chevron-down.svg";
+pub const CHECK: &str = "icons/check.svg";
 
 const ICONS: &[(&str, &[u8])] = &[
   (SIDEBAR, include_bytes!("../assets/icons/sidebar.svg")),
   (BRANCH, include_bytes!("../assets/icons/git-branch.svg")),
   (FOLDER, include_bytes!("../assets/icons/folder-01.svg")),
+  (CHEVRON_DOWN, include_bytes!("../assets/icons/chevron-down.svg")),
+  (CHECK, include_bytes!("../assets/icons/check.svg")),
 ];
 
 pub struct Assets;

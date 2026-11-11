@@ -8,6 +8,7 @@ mod create_form;
 mod detail;
 pub mod login_shell;
 mod open_menu;
+mod project_picker;
 pub mod recent;
 mod sidebar;
 mod status_bar;
@@ -17,10 +18,15 @@ mod title_bar;
 pub mod workspace;
 
 use gpui::{
-  App, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowOptions, point, px, size,
+  App, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowOptions, actions, point,
+  px, size,
 };
 
+pub use project_picker::OpenRepo;
 pub use workspace::Workspace;
+
+// Here, not in the app's `main`: the sidebar's project menu dispatches it.
+actions!(gwm_gpui, [OpenFolder]);
 
 /// The main window, centered on the main display: glass, with the app drawing
 /// its own title bar around the traffic lights, as Monocode Native does
