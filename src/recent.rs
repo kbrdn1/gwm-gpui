@@ -129,7 +129,24 @@ pub fn open_in(file: &Path, entry: Entry) -> Vec<Entry> {
       file.display()
     );
   }
-  entries.into_iter().filter(|entry| entry.path.is_dir()).collect()
+  entries.into_iter().filter_map(shown).collect()
+}
+
+/// The entry as the menu shows it: a worktree since removed gives way to the
+/// main one, beside the repo's `.git`. Hidden once both are gone. Only the
+/// list shown changes, the file keeps what was opened. Blocks on the disk.
+pub fn shown(entry: Entry) -> Option<Entry> {
+  if entry.path.is_dir() {
+    return Some(entry);
+  }
+  let main = entry
+    .key
+    .parent()
+    .filter(|_| entry.key.file_name() == Some(OsStr::new(".git")))?;
+  main.is_dir().then(|| Entry {
+    path: main.to_owned(),
+    key: entry.key.clone(),
+  })
 }
 
 #[cfg(test)]
@@ -197,5 +214,22 @@ mod tests {
     assert_eq!(load(&file).len(), 2);
     std::fs::write(&file, [0xff, 0x00, 0x13]).unwrap();
     assert!(load(&file).is_empty());
+  }
+
+  #[test]
+  fn a_repo_whose_last_worktree_was_removed_opens_its_main_one() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = home.path().join("repo");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    let removed = home.path().join("removed-worktree");
+    let key = repo.join(".git");
+    let shown = open_in(
+      &file_in(home.path()),
+      Entry {
+        key: key.clone(),
+        path: removed,
+      },
+    );
+    assert_eq!(shown, [Entry { key, path: repo }]);
   }
 }

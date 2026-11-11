@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let recent = std::env::var_os("GWM_GPUI_RECENT").map_or_else(Vec::new, |file| {
       recent::load(file.as_ref())
         .into_iter()
-        .filter(|entry| entry.path.is_dir())
+        .filter_map(recent::shown)
         .collect()
     });
     app.set_global(Projects {
