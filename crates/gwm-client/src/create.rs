@@ -130,9 +130,11 @@ fn with_trust_hint(stderr: String, repo: &Path) -> String {
   if !stderr.contains("not in the trust ledger") {
     return stderr;
   }
+  // The app runs gwm in "." when opened from a repo with no argument.
+  let dir = crate::Repo::locate(repo).map_or_else(|_| repo.to_owned(), |repo| repo.toplevel);
   format!(
     "{stderr}\n\nTo approve it, read its bootstrap commands, then run `gwm trust add` in a terminal in {}.",
-    repo.display()
+    dir.display()
   )
 }
 
@@ -321,5 +323,17 @@ mod tests {
     );
     let other = "error: invalid branch type 'nope'";
     assert_eq!(with_trust_hint(other.to_owned(), Path::new("/tmp/acme")), other);
+  }
+
+  /// The app opened with no argument runs gwm in ".": the hint names the
+  /// repo's directory, not ".". Unit tests run in this crate, inside a repo.
+  #[test]
+  fn the_trust_hint_names_the_repo_not_a_relative_path() {
+    let shown = with_trust_hint("error: x is not in the trust ledger".to_owned(), Path::new("."));
+    let toplevel = crate::Repo::locate(Path::new(".")).unwrap().toplevel;
+    assert!(
+      shown.ends_with(&format!("in a terminal in {}.", toplevel.display())),
+      "{shown}"
+    );
   }
 }
