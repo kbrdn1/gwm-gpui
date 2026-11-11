@@ -51,8 +51,12 @@ pub(crate) struct State {
   /// The worktree whose removal is under way: one at a time, since gwm
   /// removes by name, resolved against a list that may still show it.
   pub removing: Option<PathBuf>,
-  /// The last failed action, on the worktree at that path.
+  /// The last failed open, on the worktree at that path.
   pub failed: Option<(PathBuf, String)>,
+  /// The last removal's error, apart from any path: the worktree may have
+  /// left the list by the time it comes (gwm prunes before it deletes the
+  /// directory). Shown whatever is selected, until the next action.
+  removal_error: Option<String>,
   /// The root of the worktree the app was opened in, as git names it
   /// (canonical): gwm and its daemon run there, so it is not removed.
   pub opened_in: Option<PathBuf>,
@@ -67,6 +71,7 @@ impl State {
       received_at: age::now(),
       removing: None,
       failed: None,
+      removal_error: None,
       opened_in: None,
     }
   }
@@ -143,20 +148,36 @@ impl State {
       return false;
     }
     self.forget_error(&path);
+    self.removal_error = None;
     self.removing = Some(path);
     true
   }
 
-  /// An app opens `dir`: an earlier error on it no longer holds.
+  /// An app opens `dir`: an earlier error on it, or from a removal, no longer
+  /// holds.
   fn begin_open(&mut self, dir: &std::path::Path) {
     self.forget_error(dir);
+    self.removal_error = None;
   }
 
-  /// An action on `path` failed, in these words. A removal there is over.
-  fn fail(&mut self, path: PathBuf, error: String) {
-    if self.removing.as_ref() == Some(&path) {
-      self.removing = None;
-    }
+  /// The removal of `name` failed, in gwm's words.
+  /// Only this ends a removal early: nothing else knows gwm stopped.
+  fn end_removal(&mut self, name: &str, error: String) {
+    self.removing = None;
+    self.removal_error = Some(format!("Could not remove {name}: {error}"));
+  }
+
+  /// The last removal's error, whatever worktree is selected.
+  pub fn removal_error(&self) -> Option<&str> {
+    self.removal_error.as_deref()
+  }
+
+  pub(crate) fn dismiss_removal_error(&mut self) {
+    self.removal_error = None;
+  }
+
+  /// Opening `path` failed, in `open`'s words. A removal there runs on.
+  fn open_failed(&mut self, path: PathBuf, error: String) {
     self.failed = Some((path, error));
   }
 
@@ -218,6 +239,14 @@ pub(crate) fn removal_prompt(worktree: &Worktree) -> (PromptLevel, String, Strin
   } else {
     "It has no uncommitted changes."
   };
+  // gwm's `is_dirty` leaves out what git ignores, and `remove` deletes the
+  // whole directory.
+  let ignored = "Its whole directory goes, files git ignores (.env, local config) included.";
+  let locked = if worktree.is_locked {
+    "\n\nIt is locked, and gwm removes it anyway."
+  } else {
+    ""
+  };
   let branch = worktree.branch.as_ref().map_or_else(
     || "It is on a detached HEAD: no branch to keep.".to_owned(),
     |branch| format!("Its branch, {branch}, is kept."),
@@ -230,7 +259,7 @@ pub(crate) fn removal_prompt(worktree: &Worktree) -> (PromptLevel, String, Strin
   (
     level,
     format!("Remove {}?", worktree.name),
-    format!("{changes}\n\n{branch}\n\n{}", worktree.path.display()),
+    format!("{changes} {ignored}{locked}\n\n{branch}\n\n{}", worktree.path.display()),
   )
 }
 
@@ -352,6 +381,11 @@ impl Workspace {
     cx.notify();
   }
 
+  pub(crate) fn dismiss_removal_error(&mut self, cx: &mut Context<Self>) {
+    self.state.dismiss_removal_error();
+    cx.notify();
+  }
+
   pub(crate) fn toggle_menu(&mut self, cx: &mut Context<Self>) {
     self.menu_open = !self.menu_open;
     cx.notify();
@@ -371,7 +405,7 @@ impl Workspace {
         .await;
       if let Err(error) = opened {
         let _ = this.update(cx, |workspace, cx| {
-          workspace.state.fail(dir, error);
+          workspace.state.open_failed(dir, error);
           cx.notify();
         });
       }
@@ -389,7 +423,7 @@ impl Workspace {
     // What the alert said, so gwm drops nothing it did not mention.
     let confirmed_dirty = worktree.status.is_dirty || worktree.status.unknown;
     let answer = window.prompt(level, &message, Some(&detail), &["Remove", "Cancel"], cx);
-    let (repo, path) = (self.repo.clone(), worktree.path.clone());
+    let (repo, path, name) = (self.repo.clone(), worktree.path.clone(), worktree.name.clone());
     cx.spawn(async move |this, cx| {
       if answer.await != Ok(0) {
         return;
@@ -415,7 +449,7 @@ impl Workspace {
         .await;
       let _ = this.update(cx, |workspace, cx| {
         if let Err(error) = removed {
-          workspace.state.fail(path, error);
+          workspace.state.end_removal(&name, error);
         }
         match listed {
           Some(Ok(worktrees)) => workspace.state.apply(Event::Snapshot(worktrees)),
@@ -456,6 +490,7 @@ impl Render for Workspace {
           menu_shown = self.menu_open;
           let actions = detail::Actions {
             activity: self.state.activity(&worktree.path),
+            removal_error: self.state.removal_error(),
             can_remove: self.state.can_remove(worktree),
             menu: self.menu_open.then_some(self.apps.as_deref()),
           };
@@ -723,20 +758,41 @@ pub(crate) mod tests {
     assert!(!state.begin_removal(docs.clone()));
     assert!(!state.can_remove(&worktree("docs-71", false, Some(60))));
     state.begin_open(&docs);
-    state.fail(docs.clone(), "open failed".to_owned());
+    state.open_failed(docs.clone(), "open failed".to_owned());
     assert_eq!(state.activity(&fix), Some(Activity::Removing));
     assert_eq!(state.activity(&docs), Some(Activity::Failed("open failed")));
-    // The removal failing ends it: another can start.
-    state.fail(fix.clone(), "gwm refused".to_owned());
-    assert_eq!(state.activity(&fix), Some(Activity::Failed("gwm refused")));
+    // Opening the worktree being removed fails: the removal still runs.
+    state.open_failed(fix.clone(), "open failed".to_owned());
+    assert_eq!(state.removing, Some(fix.clone()));
+    assert!(!state.begin_removal(docs.clone()));
+    // Only the removal ending lets another start.
+    state.end_removal("fix-57", "gwm refused".to_owned());
     assert!(state.begin_removal(docs.clone()));
+  }
+
+  /// gwm prunes a worktree before deleting its directory: an error after
+  /// that, or the guard's own "no longer a worktree", comes for a worktree the
+  /// next list no longer shows. It stays until the user moves on.
+  #[test]
+  fn a_removal_error_outlives_its_worktree() {
+    let mut state = state(None);
+    assert!(state.begin_removal(PathBuf::from("/fix-57")));
+    state.end_removal("fix-57", "could not delete the directory".to_owned());
+    state.apply(Event::Snapshot(vec![worktree("acme-api", true, None)]));
+    let error = state.removal_error().unwrap();
+    assert!(
+      error.contains("fix-57") && error.contains("could not delete the directory"),
+      "{error}"
+    );
+    state.begin_open(Path::new("/acme-api"));
+    assert_eq!(state.removal_error(), None);
   }
 
   #[test]
   fn an_error_clears_only_for_its_own_worktree() {
     let mut state = state(None);
     let (fix, docs) = (PathBuf::from("/fix-57"), PathBuf::from("/docs-71"));
-    state.fail(docs.clone(), "open failed".to_owned());
+    state.open_failed(docs.clone(), "open failed".to_owned());
     state.begin_open(&fix);
     assert_eq!(state.activity(&docs), Some(Activity::Failed("open failed")));
     state.begin_open(&docs);
@@ -759,10 +815,18 @@ pub(crate) mod tests {
     let (level, message, detail) = removal_prompt(&fix);
     assert_eq!((level, message.as_str()), (PromptLevel::Warning, "Remove fix-57?"));
     assert!(detail.contains("no uncommitted changes"), "{detail}");
+    // gwm's `is_dirty` leaves out ignored files, `remove` deletes them anyway.
+    assert!(detail.contains("files git ignores"), "{detail}");
+    assert!(!detail.contains("locked"), "{detail}");
     assert!(
       detail.contains("Its branch, fix/#57-rate-limit-headers, is kept."),
       "{detail}"
     );
+
+    fix.is_locked = true;
+    let (_, _, detail) = removal_prompt(&fix);
+    assert!(detail.contains("It is locked, and gwm removes it anyway."), "{detail}");
+    fix.is_locked = false;
 
     fix.status.is_dirty = true;
     let (level, _, detail) = removal_prompt(&fix);

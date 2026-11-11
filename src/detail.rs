@@ -21,6 +21,8 @@ use crate::{
 /// holding the apps found so far.
 pub(crate) struct Actions<'a> {
   pub activity: Option<Activity<'a>>,
+  /// The last removal's error, whichever worktree it was on.
+  pub removal_error: Option<&'a str>,
   pub can_remove: bool,
   pub menu: Option<Option<&'a [Installed]>>,
 }
@@ -159,12 +161,26 @@ fn action_row(worktree: &Worktree, actions: Actions, cx: &mut Context<Workspace>
           )
         }),
     )
-    .children(failed.map(|error| {
+    .children(failed.map(error_text))
+    .children(actions.removal_error.map(|error| {
       div()
-        .text_size(px(12.))
-        .text_color(theme::color(theme::ERROR))
-        .child(error)
+        .flex()
+        .items_start()
+        .gap(px(8.))
+        .child(error_text(error.to_owned()).flex_1().min_w_0())
+        .child(
+          button("dismiss-removal-error", "Dismiss", theme::ink(0.9))
+            .flex_none()
+            .on_click(cx.listener(|workspace, _, _, cx| workspace.dismiss_removal_error(cx))),
+        )
     }))
+}
+
+fn error_text(error: String) -> gpui::Div {
+  div()
+    .text_size(px(12.))
+    .text_color(theme::color(theme::ERROR))
+    .child(error)
 }
 
 fn button(id: &'static str, label: &'static str, color: Hsla) -> gpui::Stateful<gpui::Div> {
