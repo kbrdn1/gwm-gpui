@@ -2,10 +2,7 @@
 //! worktree it made in the next list: from the list's fields, never from what
 //! gwm prints.
 
-use std::{
-  path::{Path, PathBuf},
-  process::{Command, Stdio},
-};
+use std::path::{Path, PathBuf};
 
 use crate::Worktree;
 
@@ -103,15 +100,14 @@ impl Create {
   }
 }
 
-/// Runs `gwm create` in `repo`, stdin closed: gwm then refuses a `.gwm.toml`
-/// no one approved instead of asking on the terminal the app was launched
-/// from. The error is gwm's stderr as is, with how to approve when that is why.
+/// Runs `gwm create` in `repo`, stdin closed and `GWM_ALLOW_BOOTSTRAP` removed
+/// (see `writing_gwm`): gwm then refuses a `.gwm.toml` no one approved. The
+/// error is gwm's stderr as is, with how to approve when that is why.
 pub fn create(repo: &Path, request: &Create) -> Result<(), String> {
-  let output = Command::new("gwm")
+  let output = crate::writing_gwm()
     .arg("create")
     .args(request.args())
     .current_dir(repo)
-    .stdin(Stdio::null())
     .output()
     .map_err(|error| format!("could not run gwm: {error}"))?;
   if output.status.success() {

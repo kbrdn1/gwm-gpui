@@ -28,6 +28,9 @@ fn isolate() -> PathBuf {
     unsafe {
       std::env::set_var("GWM_HISTORY_FILE", scratch.join("history.toml"));
       std::env::set_var("GWM_TRUST_LEDGER", scratch.join("trust-ledger.toml"));
+      // gwm takes it for `--allow-bootstrap`. Set here, whatever the user's
+      // shell exports: the client must strip it, and the trust tests prove it.
+      std::env::set_var("GWM_ALLOW_BOOTSTRAP", "1");
     }
   });
   scratch.join("trust-ledger.toml")
@@ -115,7 +118,8 @@ fn a_refusal_from_gwm_comes_back_as_gwm_wrote_it() {
 }
 
 /// A bootstrap command no one approved: with stdin closed gwm refuses, the
-/// app says how to approve it, and nothing is created nor approved.
+/// app says how to approve it, and nothing is created, run nor approved, with
+/// `GWM_ALLOW_BOOTSTRAP=1` in the environment (see [`isolate`]).
 #[test]
 fn an_unapproved_bootstrap_is_refused_with_how_to_approve_it() {
   let ledger = isolate();
@@ -132,4 +136,5 @@ fn an_unapproved_bootstrap_is_refused_with_how_to_approve_it() {
   assert!(refused.contains("run `gwm trust add` in a terminal in"), "{refused}");
   assert_eq!(paths(&acme), before);
   assert!(!ledger.exists());
+  assert!(!dir.path().join("acme-worktrees/spike/bootstrapped").exists());
 }
