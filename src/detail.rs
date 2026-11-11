@@ -16,10 +16,12 @@ use crate::{
   workspace::{Activity, Workspace},
 };
 
-/// What the card needs beyond the worktree: what is under way on it, and the
-/// "Open in…" popover, `Some` while open, holding the apps found so far.
+/// What the card needs beyond the worktree: what is under way on it, whether
+/// it can be removed now, and the "Open in…" popover, `Some` while open,
+/// holding the apps found so far.
 pub(crate) struct Actions<'a> {
-  pub activity: Option<&'a Activity>,
+  pub activity: Option<Activity<'a>>,
+  pub can_remove: bool,
   pub menu: Option<Option<&'a [Installed]>>,
 }
 
@@ -120,7 +122,7 @@ pub(crate) fn detail(
 fn action_row(worktree: &Worktree, actions: Actions, cx: &mut Context<Workspace>) -> impl IntoElement {
   let removing = matches!(actions.activity, Some(Activity::Removing));
   let failed = match actions.activity {
-    Some(Activity::Failed(error)) => Some(error.clone()),
+    Some(Activity::Failed(error)) => Some(error.to_owned()),
     _ => None,
   };
   div()
@@ -147,17 +149,14 @@ fn action_row(worktree: &Worktree, actions: Actions, cx: &mut Context<Workspace>
                 .child(open_menu(apps, &worktree.path, cx))
             })),
         )
-        // gwm does not remove the main worktree: no button that would only refuse.
-        .when(!worktree.is_main, |row| {
-          if removing {
-            // Under way: a state, not a button.
-            row.child(pill("Removing…", theme::ink(0.45)))
-          } else {
-            row.child(
-              button("remove", "Remove…", theme::color(theme::ERROR))
-                .on_click(cx.listener(|workspace, _, window, cx| workspace.confirm_remove(window, cx))),
-            )
-          }
+        // Under way: a state, not a button.
+        .when(removing, |row| row.child(pill("Removing…", theme::ink(0.45))))
+        // No button that could only refuse (see `State::can_remove`).
+        .when(actions.can_remove, |row| {
+          row.child(
+            button("remove", "Remove…", theme::color(theme::ERROR))
+              .on_click(cx.listener(|workspace, _, window, cx| workspace.confirm_remove(window, cx))),
+          )
         }),
     )
     .children(failed.map(|error| {

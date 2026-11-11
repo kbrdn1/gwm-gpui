@@ -40,6 +40,7 @@ impl Repo {
         "--git-common-dir",
       ])
       .current_dir(path)
+      .stdin(Stdio::null())
       .output()
       .map_err(|error| format!("could not run git in {}: {error}", path.display()))?;
     if !output.status.success() {
@@ -97,6 +98,7 @@ pub fn list(repo: &Path) -> Result<Vec<Worktree>, String> {
   let output = Command::new("gwm")
     .args(["list", "--format=json"])
     .current_dir(repo)
+    .stdin(Stdio::null())
     .output()
     .map_err(|error| format!("could not run gwm: {error}"))?;
   if !output.status.success() {
@@ -113,10 +115,14 @@ pub fn list(repo: &Path) -> Result<Vec<Worktree>, String> {
 /// falls back to a substring match: `auth`, removed behind the app's back,
 /// would take `auth-v2`. So a fresh list must name the selected worktree alone
 /// first ([`removable`]).
-pub fn remove(repo: &Path, selected: &Path) -> Result<(), String> {
+///
+/// `confirmed_dirty`: the user was told uncommitted changes would be lost. If
+/// they were not, and the worktree has some now (or gwm cannot tell), nothing
+/// is removed: the confirmation was for another state.
+pub fn remove(repo: &Path, selected: &Path, confirmed_dirty: bool) -> Result<(), String> {
   let opened_in = Repo::locate(repo).ok().map(|repo| repo.toplevel);
   let fresh = list(repo)?;
-  let name = removable(&fresh, selected, opened_in.as_deref())?;
+  let name = removable(&fresh, selected, opened_in.as_deref(), confirmed_dirty)?;
   let output = Command::new("gwm")
     .args(["remove", "--", name])
     .current_dir(repo)
@@ -133,8 +139,14 @@ pub fn remove(repo: &Path, selected: &Path) -> Result<(), String> {
 /// nothing else, per `fresh`, a list taken just now: its name is unique and no
 /// other worktree's id. Stricter than gwm, which leaves the main worktree out
 /// of its name match. `opened_in`: the worktree the app runs gwm, and its
-/// daemon, from, which it does not pull from under itself.
-fn removable<'a>(fresh: &'a [Worktree], selected: &Path, opened_in: Option<&Path>) -> Result<&'a str, String> {
+/// daemon, from, which it does not pull from under itself. `confirmed_dirty`:
+/// see [`remove`].
+fn removable<'a>(
+  fresh: &'a [Worktree],
+  selected: &Path,
+  opened_in: Option<&Path>,
+  confirmed_dirty: bool,
+) -> Result<&'a str, String> {
   let Some(target) = fresh.iter().find(|worktree| worktree.path == selected) else {
     return Err(format!("{} is no longer a worktree of this repo", selected.display()));
   };
@@ -145,6 +157,11 @@ fn removable<'a>(fresh: &'a [Worktree], selected: &Path, opened_in: Option<&Path
   if opened_in == Some(target.path.as_path()) {
     return Err(format!(
       "the app was opened in {name}: open it on another worktree to remove this one"
+    ));
+  }
+  if !confirmed_dirty && (target.status.is_dirty || target.status.unknown) {
+    return Err(format!(
+      "{name} has uncommitted changes since you confirmed, or gwm cannot tell: nothing was removed, confirm again"
     ));
   }
   let namesakes = fresh.iter().filter(|worktree| worktree.name == name).count();
@@ -299,14 +316,14 @@ mod tests {
   #[test]
   fn a_worktree_gone_from_the_fresh_list_is_refused_not_matched_by_substring() {
     let auth = PathBuf::from(format!("{DIR}/auth"));
-    let refused = removable(&after_auth(), &auth, None).unwrap_err();
+    let refused = removable(&after_auth(), &auth, None, false).unwrap_err();
     assert!(refused.contains("no longer a worktree"), "{refused}");
   }
 
   #[test]
   fn a_worktree_named_alone_is_removed_by_its_name() {
     let auth_v2 = PathBuf::from(format!("{DIR}/auth-v2"));
-    assert_eq!(removable(&after_auth(), &auth_v2, None), Ok("auth-v2"));
+    assert_eq!(removable(&after_auth(), &auth_v2, None, false), Ok("auth-v2"));
   }
 
   #[test]
@@ -315,16 +332,30 @@ mod tests {
     // gwm prints main with a trailing slash, the selection may not have it.
     let main = PathBuf::from(format!("{DIR}/acme"));
     assert!(
-      removable(&worktrees, &main, None)
+      removable(&worktrees, &main, None, false)
         .unwrap_err()
         .contains("main worktree")
     );
     let auth_v2 = PathBuf::from(format!("{DIR}/auth-v2"));
     assert!(
-      removable(&worktrees, &auth_v2, Some(&auth_v2))
+      removable(&worktrees, &auth_v2, Some(&auth_v2), false)
         .unwrap_err()
         .contains("opened in")
     );
+  }
+
+  /// Confirmed clean, found dirty or unknown: refused. Confirmed dirty: removed.
+  #[test]
+  fn changes_made_since_a_clean_confirmation_are_not_dropped() {
+    let auth_v2 = PathBuf::from(format!("{DIR}/auth-v2"));
+    for (dirty, unknown) in [(true, false), (false, true)] {
+      let mut worktrees = after_auth();
+      worktrees[1].status.is_dirty = dirty;
+      worktrees[1].status.unknown = unknown;
+      let refused = removable(&worktrees, &auth_v2, None, false).unwrap_err();
+      assert!(refused.contains("since you confirmed"), "{refused}");
+      assert_eq!(removable(&worktrees, &auth_v2, None, true), Ok("auth-v2"));
+    }
   }
 
   /// Two directories of the same name in different places: gwm calls the name
@@ -338,7 +369,7 @@ mod tests {
     worktrees.push(namesake.clone());
     let auth_v2 = PathBuf::from(format!("{DIR}/auth-v2"));
     assert!(
-      removable(&worktrees, &auth_v2, None)
+      removable(&worktrees, &auth_v2, None, false)
         .unwrap_err()
         .contains("2 worktrees are named")
     );
@@ -349,7 +380,7 @@ mod tests {
     namesake.id = "auth-v2".to_owned();
     worktrees.push(namesake);
     assert!(
-      removable(&worktrees, &auth_v2, None)
+      removable(&worktrees, &auth_v2, None, false)
         .unwrap_err()
         .contains("also the id")
     );

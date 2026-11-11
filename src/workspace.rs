@@ -21,13 +21,14 @@ use crate::{
 
 actions!(workspace, [SelectNext, SelectPrevious]);
 
-/// What came of the last action on a worktree, shown in its card.
+/// What is under way on a worktree, or came of the last action on it, shown
+/// in its card.
 #[derive(Debug, PartialEq)]
-pub(crate) enum Activity {
+pub(crate) enum Activity<'a> {
   /// `gwm remove` runs, or has run and the list does not show it yet.
   Removing,
   /// The action failed: gwm's or `open`'s own words.
-  Failed(String),
+  Failed(&'a str),
 }
 
 pub(crate) enum Listing {
@@ -47,8 +48,14 @@ pub(crate) struct State {
   pub selected: Option<PathBuf>,
   /// When the shown snapshot arrived: its ages count from there.
   pub received_at: i64,
-  /// The last action's outcome, on the worktree at that path.
-  pub activity: Option<(PathBuf, Activity)>,
+  /// The worktree whose removal is under way: one at a time, since gwm
+  /// removes by name, resolved against a list that may still show it.
+  pub removing: Option<PathBuf>,
+  /// The last failed action, on the worktree at that path.
+  pub failed: Option<(PathBuf, String)>,
+  /// The root of the worktree the app was opened in, as git names it
+  /// (canonical): gwm and its daemon run there, so it is not removed.
+  pub opened_in: Option<PathBuf>,
 }
 
 impl State {
@@ -58,18 +65,23 @@ impl State {
       source,
       selected: None,
       received_at: age::now(),
-      activity: None,
+      removing: None,
+      failed: None,
+      opened_in: None,
     }
   }
 
   fn apply(&mut self, event: Event) {
     match event {
       Event::Snapshot(worktrees) => {
-        // A removal ends with the first list without its worktree.
-        if let Some((path, _)) = &self.activity
-          && !worktrees.iter().any(|worktree| &worktree.path == path)
-        {
-          self.activity = None;
+        // A removal ends with the first list without its worktree, and an
+        // error goes with its worktree.
+        let listed = |path: &PathBuf| worktrees.iter().any(|worktree| &worktree.path == path);
+        if self.removing.as_ref().is_some_and(|path| !listed(path)) {
+          self.removing = None;
+        }
+        if self.failed.as_ref().is_some_and(|(path, _)| !listed(path)) {
+          self.failed = None;
         }
         self.listing = Listing::Ready(worktrees);
         self.received_at = age::now();
@@ -117,11 +129,48 @@ impl State {
     self.selected = Some(worktrees[order[position]].path.clone());
   }
 
-  pub fn activity(&self, path: &std::path::Path) -> Option<&Activity> {
-    self
-      .activity
-      .as_ref()
-      .and_then(|(on, activity)| (on == path).then_some(activity))
+  pub fn activity(&self, path: &std::path::Path) -> Option<Activity<'_>> {
+    if self.removing.as_deref() == Some(path) {
+      return Some(Activity::Removing);
+    }
+    let (on, error) = self.failed.as_ref()?;
+    (on == path).then_some(Activity::Failed(error))
+  }
+
+  /// Starts a removal on `path`, unless one is already under way.
+  fn begin_removal(&mut self, path: PathBuf) -> bool {
+    if self.removing.is_some() {
+      return false;
+    }
+    self.forget_error(&path);
+    self.removing = Some(path);
+    true
+  }
+
+  /// An app opens `dir`: an earlier error on it no longer holds.
+  fn begin_open(&mut self, dir: &std::path::Path) {
+    self.forget_error(dir);
+  }
+
+  /// An action on `path` failed, in these words. A removal there is over.
+  fn fail(&mut self, path: PathBuf, error: String) {
+    if self.removing.as_ref() == Some(&path) {
+      self.removing = None;
+    }
+    self.failed = Some((path, error));
+  }
+
+  fn forget_error(&mut self, path: &std::path::Path) {
+    if self.failed.as_ref().is_some_and(|(on, _)| on == path) {
+      self.failed = None;
+    }
+  }
+
+  /// Whether the card offers "Remove…" for `worktree`: never on main, nor on
+  /// the worktree the app was opened in (paths compared whole, not as
+  /// prefixes), nor while another removal runs.
+  pub fn can_remove(&self, worktree: &Worktree) -> bool {
+    !worktree.is_main && self.opened_in.as_deref() != Some(worktree.path.as_path()) && self.removing.is_none()
   }
 
   fn position(&self, order: &[usize]) -> Option<usize> {
@@ -231,10 +280,17 @@ impl Workspace {
   }
 
   fn with_state(repo: PathBuf, state: State, cx: &mut Context<Self>) -> Self {
+    let located = repo.clone();
     cx.spawn(async move |this, cx| {
-      let found = cx.background_spawn(async { apps::installed(&apps::roots()) }).await;
+      let (found, opened_in) = cx
+        .background_spawn(async move {
+          let opened_in = gwm_client::Repo::locate(&located).ok().map(|repo| repo.toplevel);
+          (apps::installed(&apps::roots()), opened_in)
+        })
+        .await;
       let _ = this.update(cx, |workspace, cx| {
         workspace.apps = Some(found);
+        workspace.state.opened_in = opened_in;
         cx.notify();
       });
     })
@@ -304,7 +360,7 @@ impl Workspace {
   /// Opens `dir` in the app at `bundle`, off the UI thread.
   pub(crate) fn open_in(&mut self, bundle: PathBuf, dir: PathBuf, cx: &mut Context<Self>) {
     self.menu_open = false;
-    self.state.activity = None;
+    self.state.begin_open(&dir);
     cx.notify();
     cx.spawn(async move |this, cx| {
       let opened = cx
@@ -315,7 +371,7 @@ impl Workspace {
         .await;
       if let Err(error) = opened {
         let _ = this.update(cx, |workspace, cx| {
-          workspace.state.activity = Some((dir, Activity::Failed(error)));
+          workspace.state.fail(dir, error);
           cx.notify();
         });
       }
@@ -326,10 +382,12 @@ impl Workspace {
   /// Asks, then removes the selected worktree through gwm, off the UI thread.
   /// Live, the daemon's next snapshot drops it; not live, a new `gwm list` does.
   pub(crate) fn confirm_remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(worktree) = self.state.selected() else {
+    let Some(worktree) = self.state.selected().filter(|worktree| self.state.can_remove(worktree)) else {
       return;
     };
     let (level, message, detail) = removal_prompt(worktree);
+    // What the alert said, so gwm drops nothing it did not mention.
+    let confirmed_dirty = worktree.status.is_dirty || worktree.status.unknown;
     let answer = window.prompt(level, &message, Some(&detail), &["Remove", "Cancel"], cx);
     let (repo, path) = (self.repo.clone(), worktree.path.clone());
     cx.spawn(async move |this, cx| {
@@ -337,10 +395,10 @@ impl Workspace {
         return;
       }
       // Asked now, not before the alert, which may have stayed open a while.
-      let Ok(relist) = this.update(cx, |workspace, cx| {
-        workspace.state.activity = Some((path.clone(), Activity::Removing));
+      let Ok(Some(relist)) = this.update(cx, |workspace, cx| {
+        let started = workspace.state.begin_removal(path.clone());
         cx.notify();
-        matches!(workspace.state.source, Some(Source::Once(_)))
+        started.then_some(matches!(workspace.state.source, Some(Source::Once(_))))
       }) else {
         return;
       };
@@ -348,18 +406,21 @@ impl Workspace {
         .background_spawn({
           let path = path.clone();
           async move {
-            let removed = gwm_client::remove(&repo, &path);
-            let listed = (removed.is_ok() && relist).then(|| gwm_client::list(&repo));
+            let removed = gwm_client::remove(&repo, &path, confirmed_dirty);
+            // Refused or not: a worktree already gone elsewhere leaves the list too.
+            let listed = relist.then(|| gwm_client::list(&repo));
             (removed, listed)
           }
         })
         .await;
       let _ = this.update(cx, |workspace, cx| {
-        match (removed, listed) {
-          (Err(error), _) => workspace.state.activity = Some((path, Activity::Failed(error))),
-          (Ok(()), Some(Ok(worktrees))) => workspace.state.apply(Event::Snapshot(worktrees)),
-          (Ok(()), Some(Err(error))) => workspace.state.apply(Event::Failed(error)),
-          (Ok(()), None) => {}
+        if let Err(error) = removed {
+          workspace.state.fail(path, error);
+        }
+        match listed {
+          Some(Ok(worktrees)) => workspace.state.apply(Event::Snapshot(worktrees)),
+          Some(Err(error)) => workspace.state.apply(Event::Failed(error)),
+          None => {}
         }
         cx.notify();
       });
@@ -384,13 +445,18 @@ impl Render for Workspace {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let ages = self.ages();
     let selected = self.state.selected();
+    // The popover lives in the card: no card, no popover, and no veil over
+    // the window waiting to swallow a click.
+    let mut menu_shown = false;
     let card = match &self.state.listing {
       Listing::Loading => message("Loading worktrees…", theme::ink(0.5)).into_any_element(),
       Listing::Failed(error) => message(error, theme::color(theme::ERROR)).into_any_element(),
       Listing::Ready(_) => match selected {
         Some(worktree) => {
+          menu_shown = self.menu_open;
           let actions = detail::Actions {
             activity: self.state.activity(&worktree.path),
+            can_remove: self.state.can_remove(worktree),
             menu: self.menu_open.then_some(self.apps.as_deref()),
           };
           detail::detail(worktree, ages, actions, cx).into_any_element()
@@ -469,7 +535,7 @@ impl Render for Workspace {
       )
       // While the popover is open, a press anywhere else closes it and does
       // nothing more: not even the "Open in…" button reopening it.
-      .when(self.menu_open, |root| {
+      .when(menu_shown, |root| {
         root.child(
           div()
             .id("dismiss-menu")
@@ -639,12 +705,51 @@ pub(crate) mod tests {
   #[test]
   fn a_removal_shows_until_the_first_list_without_its_worktree() {
     let mut state = state(None);
-    state.activity = Some((PathBuf::from("/fix-57"), Activity::Removing));
+    assert!(state.begin_removal(PathBuf::from("/fix-57")));
     state.apply(Event::Snapshot(demo()));
-    assert_eq!(state.activity(Path::new("/fix-57")), Some(&Activity::Removing));
+    assert_eq!(state.activity(Path::new("/fix-57")), Some(Activity::Removing));
     assert_eq!(state.activity(Path::new("/docs-71")), None);
     state.apply(Event::Snapshot(vec![worktree("acme-api", true, None)]));
-    assert_eq!(state.activity, None);
+    assert_eq!(state.removing, None);
+  }
+
+  /// A second removal could start while gwm still runs the first, on a list
+  /// that still shows it: only one at a time, and nothing else ends it.
+  #[test]
+  fn one_removal_at_a_time_and_nothing_else_cancels_it() {
+    let mut state = state(None);
+    let (fix, docs) = (PathBuf::from("/fix-57"), PathBuf::from("/docs-71"));
+    assert!(state.begin_removal(fix.clone()));
+    assert!(!state.begin_removal(docs.clone()));
+    assert!(!state.can_remove(&worktree("docs-71", false, Some(60))));
+    state.begin_open(&docs);
+    state.fail(docs.clone(), "open failed".to_owned());
+    assert_eq!(state.activity(&fix), Some(Activity::Removing));
+    assert_eq!(state.activity(&docs), Some(Activity::Failed("open failed")));
+    // The removal failing ends it: another can start.
+    state.fail(fix.clone(), "gwm refused".to_owned());
+    assert_eq!(state.activity(&fix), Some(Activity::Failed("gwm refused")));
+    assert!(state.begin_removal(docs.clone()));
+  }
+
+  #[test]
+  fn an_error_clears_only_for_its_own_worktree() {
+    let mut state = state(None);
+    let (fix, docs) = (PathBuf::from("/fix-57"), PathBuf::from("/docs-71"));
+    state.fail(docs.clone(), "open failed".to_owned());
+    state.begin_open(&fix);
+    assert_eq!(state.activity(&docs), Some(Activity::Failed("open failed")));
+    state.begin_open(&docs);
+    assert_eq!(state.activity(&docs), None);
+  }
+
+  #[test]
+  fn no_remove_on_main_nor_on_the_worktree_the_app_was_opened_in() {
+    let mut state = state(None);
+    state.opened_in = Some(PathBuf::from("/fix-57"));
+    assert!(!state.can_remove(&worktree("acme-api", true, None)));
+    assert!(!state.can_remove(&worktree("fix-57", false, Some(60))));
+    assert!(state.can_remove(&worktree("docs-71", false, Some(60))));
   }
 
   #[test]

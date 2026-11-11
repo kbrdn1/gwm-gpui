@@ -159,7 +159,7 @@ fn a_removal_through_gwm_shows_in_the_next_snapshot() {
 
   assert!(matches!(next(&events), Event::Source(Source::OwnDaemon(_))));
   assert_eq!(snapshot(&events), ["acme", "feat-1"]);
-  gwm_client::remove(&acme, &dir.path().canonicalize().unwrap().join("feat-1")).unwrap();
+  gwm_client::remove(&acme, &dir.path().canonicalize().unwrap().join("feat-1"), false).unwrap();
   assert_eq!(snapshot(&events), ["acme"]);
   drop(events);
   spawned.stop();

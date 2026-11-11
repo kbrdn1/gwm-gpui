@@ -68,7 +68,7 @@ fn refuses_a_worktree_removed_behind_its_back_instead_of_its_namesake() {
   let auth = path_of(&acme, "auth");
   git(&acme, &["worktree", "remove", "../auth"]);
 
-  let refused = gwm_client::remove(&acme, &auth).unwrap_err();
+  let refused = gwm_client::remove(&acme, &auth, false).unwrap_err();
   assert!(refused.contains("no longer"), "{refused}");
   assert_eq!(names(&acme), ["acme", "auth-v2"]);
 }
@@ -81,10 +81,25 @@ fn removes_the_selected_worktree_and_keeps_its_branch() {
   let auth = path_of(&acme, "auth");
   fs::write(auth.join("draft.txt"), "uncommitted").unwrap();
 
-  assert_eq!(gwm_client::remove(&acme, &auth), Ok(()));
+  assert_eq!(gwm_client::remove(&acme, &auth, true), Ok(()));
   assert_eq!(names(&acme), ["acme", "auth-v2"]);
   assert!(!auth.exists());
   git(&acme, &["rev-parse", "--verify", "-q", "refs/heads/feat/auth"]);
+}
+
+/// Confirmed while clean, then edited before gwm ran: the confirmation did
+/// not cover those changes, so nothing is removed.
+#[test]
+fn refuses_changes_made_after_a_clean_confirmation() {
+  let dir = tempfile::tempdir().unwrap();
+  let acme = acme(dir.path(), &["auth"]);
+  let auth = path_of(&acme, "auth");
+  fs::write(auth.join("draft.txt"), "written after the confirmation").unwrap();
+
+  let refused = gwm_client::remove(&acme, &auth, false).unwrap_err();
+  assert!(refused.contains("since you confirmed"), "{refused}");
+  assert_eq!(names(&acme), ["acme", "auth"]);
+  assert!(auth.join("draft.txt").exists());
 }
 
 /// The app runs gwm, and its daemon, from where it was opened: removing that
@@ -96,7 +111,7 @@ fn refuses_the_worktree_the_app_was_opened_in() {
   let auth = path_of(&acme, "auth");
   fs::create_dir(auth.join("src")).unwrap();
 
-  let refused = gwm_client::remove(&auth.join("src"), &auth).unwrap_err();
+  let refused = gwm_client::remove(&auth.join("src"), &auth, false).unwrap_err();
   assert!(refused.contains("opened in"), "{refused}");
   assert_eq!(names(&acme), ["acme", "auth"]);
 }
@@ -107,7 +122,7 @@ fn refuses_the_main_worktree() {
   let acme = acme(dir.path(), &["auth"]);
   let main = path_of(&acme, "acme");
 
-  let refused = gwm_client::remove(&path_of(&acme, "auth"), &main).unwrap_err();
+  let refused = gwm_client::remove(&path_of(&acme, "auth"), &main, false).unwrap_err();
   assert!(refused.contains("main worktree"), "{refused}");
   assert_eq!(names(&acme), ["acme", "auth"]);
 }
@@ -127,7 +142,7 @@ fn a_refusal_from_gwm_comes_back_as_gwm_wrote_it() {
   git(&acme, &["commit", "-q", "-m", "hooks"]);
   git(&acme, &["worktree", "add", "-q", "../auth", "-b", "feat/auth"]);
 
-  let refused = gwm_client::remove(&acme, &path_of(&acme, "auth")).unwrap_err();
+  let refused = gwm_client::remove(&acme, &path_of(&acme, "auth"), false).unwrap_err();
   assert!(
     refused.starts_with("error: ") && refused.contains("trust ledger"),
     "{refused}"
