@@ -20,14 +20,12 @@ fn main() {
     }
   }
 
-  // The repo to list: the first argument (an old macOS adds `-psn_…` to a
-  // Finder launch, not a path), else the current directory if it is in one.
-  // The Finder starts the app in `/`: then the user picks a folder. A given
-  // argument is not checked: a bare repo is no work tree for git, but gwm
+  // The repo to list: the first argument, else the current directory if it is
+  // in one. The Finder starts the app in `/`: then the user picks a folder. A
+  // given argument is not checked: a bare repo is no work tree for git, but gwm
   // lists it, and the window says why when nothing can be listed.
   let repo = std::env::args_os()
-    .skip(1)
-    .find(|arg| !arg.to_string_lossy().starts_with("-psn_"))
+    .nth(1)
     .map(PathBuf::from)
     .or_else(|| Repo::locate(".".as_ref()).is_ok().then(|| PathBuf::from(".")));
 
@@ -58,29 +56,45 @@ fn main() {
       }
       // In front, or the panel opens behind the app that launched this one.
       cx.activate(true);
-      // A folder that is no repo still opens: the window says what git and
-      // gwm make of it, which an alert could only repeat.
-      let picked = cx.prompt_for_paths(PathPromptOptions {
-        files: false,
-        directories: true,
-        multiple: false,
-        prompt: Some("Open".into()),
-      });
-      cx.spawn(async move |cx| {
-        let repo = picked
-          .await
-          .ok()
-          .and_then(Result::ok)
-          .flatten()
-          .and_then(|paths| paths.into_iter().next());
-        cx.update(|cx| match repo {
-          Some(repo) => open(repo, spawned, cx),
-          // Cancelled: there is nothing to show.
-          None => cx.quit(),
-        });
-      })
-      .detach();
+      pick(spawned, cx);
     });
+}
+
+/// Asks for a folder until one is in a git repo, or the user cancels. A folder
+/// outside any repo opens the picker again: a window on it would only show
+/// an error, with no way to pick another. A bare repo is refused here too, as
+/// git sees no work tree in it: pass it as an argument instead.
+fn pick(spawned: Spawned, cx: &mut App) {
+  let picked = cx.prompt_for_paths(PathPromptOptions {
+    files: false,
+    directories: true,
+    multiple: false,
+    prompt: Some("Open repo".into()),
+  });
+  cx.spawn(async move |cx| {
+    let folder = picked
+      .await
+      .ok()
+      .and_then(Result::ok)
+      .flatten()
+      .and_then(|paths| paths.into_iter().next());
+    // git runs off the UI thread.
+    let in_repo = match folder.clone() {
+      Some(folder) => {
+        cx.background_executor()
+          .spawn(async move { Repo::locate(&folder).is_ok() })
+          .await
+      }
+      None => false,
+    };
+    cx.update(|cx| match folder {
+      Some(folder) if in_repo => open(folder, spawned, cx),
+      Some(_) => pick(spawned, cx),
+      // Cancelled: there is nothing to show.
+      None => cx.quit(),
+    });
+  })
+  .detach();
 }
 
 fn open(repo: PathBuf, spawned: Spawned, cx: &mut App) {

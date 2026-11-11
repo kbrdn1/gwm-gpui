@@ -17,7 +17,7 @@ A native desktop app for [gwm](https://github.com/kbrdn1/gwm-cli), the git workt
 cargo run -- /path/to/a/repo   # defaults to the current directory
 ```
 
-The first build compiles GPUI and takes several minutes. Without an argument, outside a repo, the app asks for a folder. A folder that is not a repo still opens, and the status bar says what git made of it.
+The first build compiles GPUI and takes several minutes. Without an argument, outside a repo, the app asks for a folder, and asks again until the folder is in a git repo.
 
 ## Install
 
