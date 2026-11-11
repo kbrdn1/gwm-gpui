@@ -14,6 +14,9 @@
 //! `--keys` and `--click` repeat, and apply in the order given: `--click` on a
 //! field, then `--keys "4 2"` types into it.
 //!
+//! The project menu lists the recent repos of the file `GWM_GPUI_RECENT` names,
+//! if any: the app's own file is never read.
+//!
 //! Without `--live`, the worktrees are read once with `gwm list`. The window's
 //! blur comes from the window server, not from GPUI, so it is not in the
 //! image: translucent surfaces come out translucent, over nothing.
@@ -27,7 +30,11 @@ use std::{
 
 use gpui::{AppContext, Bounds, Focusable, Modifiers, VisualTestAppContext, WindowBounds, point, px, size};
 use gwm_client::watch::{Source, Spawned};
-use gwm_gpui::{Workspace, assets::Assets};
+use gwm_gpui::{
+  Workspace,
+  assets::Assets,
+  recent::{self, Projects},
+};
 
 enum Step {
   Keys(String),
@@ -84,7 +91,8 @@ fn main() -> Result<(), Box<dyn Error>> {
       size: size(px(1200.), px(760.)),
     }));
     let spawned = spawned.clone();
-    app.open_window(window_options, |window, cx| {
+    let key = gwm_client::Repo::locate(&repo).ok().map(|located| located.common_dir);
+    let window = app.open_window(window_options, |window, cx| {
       let workspace = cx.new(|cx| {
         let mut workspace = match worktrees {
           Some(worktrees) => {
@@ -99,7 +107,19 @@ fn main() -> Result<(), Box<dyn Error>> {
       // As the app does: keys reach the workspace only once it has focus.
       window.focus(&workspace.focus_handle(cx), cx);
       workspace
-    })?
+    })?;
+    // As the app has it once the repo opened: its window, and the recent repos.
+    let recent = std::env::var_os("GWM_GPUI_RECENT").map_or_else(Vec::new, |file| {
+      recent::load(file.as_ref())
+        .into_iter()
+        .filter_map(recent::shown)
+        .collect()
+    });
+    app.set_global(Projects {
+      recent,
+      windows: key.map(|key| (key, window.into())).into_iter().collect(),
+    });
+    window
   };
 
   if let Some(millis) = options.live {
