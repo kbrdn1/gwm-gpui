@@ -146,6 +146,26 @@ fn starts_its_own_daemon_follows_changes_and_stops_it() {
   handle.join().unwrap();
 }
 
+/// The app removes through `gwm remove`, and reloads nothing: the daemon's next
+/// snapshot carries the change.
+#[test]
+fn a_removal_through_gwm_shows_in_the_next_snapshot() {
+  let dir = tempfile::tempdir().unwrap();
+  let acme = repo(dir.path(), "acme");
+  git(&acme, &["worktree", "add", "-q", "../feat-1", "-b", "feat/#1-x"]);
+  let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
+  let (events, handle) = start_watch(&acme, sockets(&dir, true), &spawned);
+
+  assert!(matches!(next(&events), Event::Source(Source::OwnDaemon(_))));
+  assert_eq!(snapshot(&events), ["acme", "feat-1"]);
+  gwm_client::remove(&acme, &dir.path().canonicalize().unwrap().join("feat-1")).unwrap();
+  assert_eq!(snapshot(&events), ["acme"]);
+  drop(events);
+  spawned.stop();
+  handle.join().unwrap();
+}
+
 #[test]
 fn uses_the_daemon_left_on_its_own_socket() {
   let dir = tempfile::tempdir().unwrap();
