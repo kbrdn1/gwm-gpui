@@ -201,9 +201,24 @@ fn unresolved(listed: Option<u64>, loading: bool) -> AnyElement {
     .flex()
     .items_center()
     .gap(px(8.))
-    .child(text(&number(listed), theme::ink(0.9)).flex_none())
+    .children(unresolved_number(listed, loading).map(|label| text(&label, theme::ink(0.9)).flex_none()))
     .when(loading, |row| row.child(text("loading…", theme::ink(0.45))))
     .into_any_element()
+}
+
+/// The list's number while `gwm status` runs or after it failed. Without
+/// one, nothing while it runs, "unknown" once it failed: never "none".
+fn unresolved_number(listed: Option<u64>, loading: bool) -> Option<String> {
+  match listed {
+    Some(number) => Some(format!("#{number}")),
+    None => (!loading).then(|| "unknown".to_owned()),
+  }
+}
+
+/// Whether a click may hand `url` to the system: gwm copies it from the
+/// forge, and a `file://` or an app's own scheme would launch something else.
+fn openable(url: &str) -> bool {
+  url.starts_with("https://")
 }
 
 /// `#n`, then each live field gwm gave: its state, its checks, its title.
@@ -228,7 +243,7 @@ fn link(
     .children(checks.map(|(label, color)| text(&label, color).flex_none()))
     .children(title.map(|title| text(title, theme::ink(0.6))))
     .when(!live, |row| row.child(text("no live state from gwm", theme::ink(0.45))))
-    .when_some(url, |row, url| {
+    .when_some(url.filter(|url| openable(url)), |row, url| {
       row
         .cursor_pointer()
         .rounded(px(4.))
@@ -324,10 +339,6 @@ pub(crate) fn pill(label: &'static str, color: Hsla) -> gpui::Div {
     .child(label)
 }
 
-fn number(value: Option<u64>) -> String {
-  value.map_or_else(|| "none".to_owned(), |number| format!("#{number}"))
-}
-
 fn fact(label: &'static str, value: impl IntoElement) -> impl IntoElement {
   div()
     .h(px(30.))
@@ -355,4 +366,32 @@ fn mono(value: String) -> gpui::Div {
     .font_family(theme::MONO_FONT)
     .text_size(px(12.))
     .text_color(theme::ink(0.9))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn only_an_https_url_is_opened() {
+    assert!(openable("https://github.com/kbrdn1/gwm-cli/pull/705"));
+    for url in [
+      "http://github.com/kbrdn1/gwm-cli/pull/705",
+      "file:///Applications/Calculator.app",
+      "x-forge-app://open",
+      "javascript:alert(1)",
+      " https://github.com",
+      "",
+    ] {
+      assert!(!openable(url), "{url}");
+    }
+  }
+
+  #[test]
+  fn a_failed_status_never_says_none() {
+    assert_eq!(unresolved_number(Some(705), false).as_deref(), Some("#705"));
+    assert_eq!(unresolved_number(None, false).as_deref(), Some("unknown"));
+    assert_eq!(unresolved_number(Some(705), true).as_deref(), Some("#705"));
+    assert_eq!(unresolved_number(None, true), None);
+  }
 }
