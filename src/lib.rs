@@ -5,6 +5,7 @@ mod age;
 mod apps;
 pub mod assets;
 mod detail;
+pub mod login_shell;
 mod open_menu;
 mod sidebar;
 mod status_bar;

@@ -17,7 +17,17 @@ A native desktop app for [gwm](https://github.com/kbrdn1/gwm-cli), the git workt
 cargo run -- /path/to/a/repo   # defaults to the current directory
 ```
 
-The first build compiles GPUI and takes several minutes.
+The first build compiles GPUI and takes several minutes. Without an argument, outside a repo, the app asks for a folder. A folder in no repo still opens, and the window says what git and gwm make of it; File > Open… (⌘O) opens another folder in a new window.
+
+## Install
+
+```bash
+scripts/bundle.sh   # builds gwm.app, unsigned, and prints its path
+```
+
+It is a release build: GPUI compiles again, and takes several GB under `target/`. Copy `gwm.app` to `/Applications`, or open it where it is (`open target/release/gwm.app`, `--args /path/to/a/repo` to skip the folder picker). Not being signed, it is Gatekeeper's to judge on another Mac.
+
+A Finder launch gets launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), without `gwm` or Homebrew. When `gwm` is not on the `PATH` it was given, the app asks your login shell (`$SHELL -l -i`, so `.zprofile` and `.zshrc`) for its own, and gives up after 5 seconds. The daemon it starts inherits it.
 
 Up and down move the selection; a click selects a worktree. The title bar's sidebar button hides the sidebar. In the selected worktree's card, "Open in…" lists the editors and terminals installed in `/Applications`, `~/Applications` and the system's Utilities, and "Remove…" removes the worktree through gwm, keeping its branch, once you confirm.
 

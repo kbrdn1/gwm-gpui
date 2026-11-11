@@ -9,15 +9,18 @@ App desktop native pour [gwm](https://github.com/kbrdn1/gwm-cli), en Rust sur GP
 - Test  : `cargo test` (l'app et `gwm-client`) · `cargo test -p gwm-client` (la couche gwm seule, en quelques secondes, sans compiler GPUI). Les tests de `gwm-client` pilotent un vrai `gwm daemon` : `gwm` doit être sur le `PATH`, sinon ils échouent (exprès, ils ne se sautent pas).
 - Lint/Format : `cargo clippy --workspace --all-targets --all-features -- -D warnings` (comme la CI : `--all-features` vérifie aussi l'example de capture) · `cargo fmt --all`
 - Audit : `cargo audit --deny warnings` (lit `.cargo/audit.toml`)
-- Run   : `cargo run -- <chemin-du-repo>` (par défaut le dossier courant). `gwm` doit être sur le `PATH`.
+- Run   : `cargo run -- <chemin-du-repo>` (par défaut le dossier courant s'il est dans un repo, sinon un sélecteur de dossier). `gwm` doit être sur le `PATH`.
+- Bundle : `scripts/bundle.sh` → `gwm.app` non signé dans `$CARGO_TARGET_DIR/release/` (build `--release` : recompile GPUI, plusieurs Go). Icône dessinée depuis `assets/app-icon.svg` par `sips` + `iconutil`, rien hors de macOS. Lancé du Finder : `open <…>/gwm.app`, ou `--args <repo>`.
 
 Premier build long (GPUI compile tout) : `nice -n 10 cargo build -j 4` pour ne pas saturer la machine.
 
 Voir l'UI sans écran : `cargo run --example screenshot --features screenshot -- <repo> <out.png> [--row n] [--no-sidebar] [--keys "down down"] [--click x,y] [--live ms]`. `--keys` et `--click` passent par les vrais bindings et le vrai focus ; `--live` suit le repo comme l'app (thread `watch`, daemon lancé puis arrêté). Rend la fenêtre via `Window::render_to_image` (texture Metal, sans permission d'enregistrement d'écran). La feature tire le `test-support` de GPUI, jamais dans l'app ; la CI passe clippy en `--all-features` pour que l'example ne pourrisse pas. Le PNG garde l'alpha : le poser sur un fond (`magick fond.png rendu.png -composite`, fond en **sRGB**, un `gradient:` est en niveaux de gris et désature tout) pour juger. Le flou du window server n'y est pas.
 
 ## Structure
-- `src/main.rs` : bootstrap de l'application (assets, touches, fenêtre, arrêt du daemon au `on_app_quit`). Tout le reste est en lib (`src/lib.rs` : `window_options`, `bind_keys`), pour que l'example de capture ouvre la même fenêtre.
+- `src/main.rs` : bootstrap de l'application (`PATH` du shell de login si `gwm` n'est pas sur celui hérité, repo : argument, sinon dossier courant s'il est dans un repo, sinon sélecteur de dossier ; assets, touches, fenêtre, arrêt du daemon au `on_app_quit`). Tout le reste est en lib (`src/lib.rs` : `window_options`, `bind_keys`), pour que l'example de capture ouvre la même fenêtre.
 - Vues, un fichier chacune : `src/workspace.rs` (vue racine : état, sélection, cadre « rounded card » et ses coins peints), `src/title_bar.rs`, `src/sidebar.rs`, `src/detail.rs` (et ses actions : ouvrir dans…, supprimer), `src/open_menu.rs` (popover « Open in… »), `src/status_bar.rs`. Logique sans fenêtre testée : `State`, `order` et `removal_prompt` (workspace), `sections` (sidebar), `src/age.rs` (format et groupes par jour, ceux de Monocode), `src/apps.rs` (éditeurs et terminaux installés, par leur bundle `.app` comme Monocode, ouverts par `/usr/bin/open -a`).
+- `src/login_shell.rs` : le `PATH` du shell de login (`$SHELL -l -i`, valeur entre marqueurs, timeout de 5 s, groupe tué au-delà), pour un lancement Finder qui n'a que celui de launchd. D'après `scm/shell.rs` de Monocode.
+- `scripts/bundle.sh` + `assets/app-icon.svg` : le `gwm.app` et son icône (tuile d'accent + branche ; ses couleurs recopient `theme.rs`, à changer ensemble).
 - `src/assets.rs` + `assets/icons/` : 3 glyphes Hugeicons (MIT) repris de Monocode, embarqués (`include_bytes!`), crédités dans `NOTICE`.
 - `examples/screenshot.rs` : rend la fenêtre hors écran en PNG (voir commandes).
 - `crates/gwm-client/` : tout ce qui parle à gwm, sans dépendance GPUI (workspace Cargo).
