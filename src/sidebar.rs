@@ -57,7 +57,8 @@ pub(crate) enum Child {
   /// The worktree at this index, with its sessions inside it once it is
   /// selected: they are no children of the list.
   Worktree(usize),
-  /// The filter keeps no worktree: the list says so, in place of its rows.
+  /// The filter keeps none of the worktrees: the list says so, in place of
+  /// its rows.
   NoMatch,
 }
 
@@ -69,7 +70,9 @@ pub(crate) fn children(worktrees: &[Worktree], query: &Query, bucket: impl Fn(u6
     children.push(Child::Title(section.title));
     children.extend(section.rows.into_iter().map(Child::Worktree));
   }
-  if children.is_empty() && !query.is_empty() {
+  // Only where there were worktrees to look through: a list that is not
+  // there, or that gwm failed to give, matches nothing and says nothing.
+  if children.is_empty() && !worktrees.is_empty() {
     children.push(Child::NoMatch);
   }
   children
@@ -451,8 +454,10 @@ mod tests {
     assert!(sections(&worktrees, &none, day).is_empty());
     assert_eq!(children(&worktrees, &none, day), [Child::NoMatch]);
     assert_eq!(child_of(&worktrees, &none, Some(Path::new("/main")), day), None);
-    // No filter, no worktree: nothing to say, the list is not there yet.
+    // No worktree: the list is not there yet, or gwm failed and the card
+    // says why. Nothing was looked through, so nothing is said not to match.
     assert_eq!(children(&[], &Query::default(), day), []);
+    assert_eq!(children(&[], &none, day), []);
   }
 
   /// A worktree's sessions are drawn inside its own child of the list: they
