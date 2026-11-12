@@ -18,8 +18,10 @@ assets/icons/LICENSE-MONOCODE):
   bar, traffic light position, minimum size (crates/monocode-gpui/src/main.rs);
 - src/title_bar.rs takes its title bar and tab plate, and its tile's rim
   (theme.rs title_tab_plate, tab_tile.rs);
-- src/sidebar.rs takes its section label and its detailed session row
-  metrics (theme.rs section_label, shell.rs, shell/sidebar_list.rs);
+- src/sidebar.rs takes its section label, its detailed session row
+  metrics and its "New" navigation row: the glyph, the word, the shortcut
+  in its trailing column (theme.rs section_label, shell.rs,
+  shell/sidebar_list.rs sidebar_navigation);
 - src/sessions.rs takes its rails: a row's sessions hung on a line under
   it, the step and the nested row's metrics, and the state that stands in
   the time's place while the agent works (shell/rails.rs, activity.rs

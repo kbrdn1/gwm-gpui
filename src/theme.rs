@@ -57,6 +57,14 @@ pub const TAB_MAX_WIDTH: Pixels = px(224.);
 pub const POPOVER_RADIUS: Pixels = px(12.);
 pub const MENU_ROW_HEIGHT: Pixels = px(28.);
 pub const MENU_ROW_RADIUS: Pixels = px(8.);
+/// Monocode's sidebar navigation row, "New" (`sidebar_navigation` in
+/// `shell/sidebar_list.rs`): its height, and the corners it shares with the
+/// chrome's buttons (Tailwind's `rounded-md`).
+pub const NAV_ROW_HEIGHT: Pixels = px(32.);
+pub const CONTROL_RADIUS: Pixels = px(6.);
+/// The column a navigation row keeps for its shortcut, centred on the axis
+/// of the header's buttons above it (`TRAILING_SLOT`).
+pub const NAV_TRAILING_SLOT: Pixels = px(14.);
 
 pub fn ink(alpha: f32) -> Hsla {
   with_alpha(INK, alpha)

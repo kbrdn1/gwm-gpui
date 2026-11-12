@@ -28,7 +28,7 @@ use crate::{
   detail, sidebar, status_bar, theme, title_bar,
 };
 
-actions!(workspace, [SelectNext, SelectPrevious, CloseForm]);
+actions!(workspace, [SelectNext, SelectPrevious, CloseForm, NewWorktree]);
 
 /// What is under way on a worktree, or came of the last action on it, shown
 /// in its card.
@@ -707,6 +707,16 @@ impl Workspace {
   pub(crate) fn toggle_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.form_open {
       self.close_form(window, cx);
+    } else {
+      self.open_form(window, cx);
+    }
+  }
+
+  /// Shows the form, its first field focused, or gives an open one the focus
+  /// back: the sidebar's "New" row, its shortcut and File > New Worktree.
+  /// Not before a list is shown, when the title bar has no `+` either.
+  pub(crate) fn open_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.state.can_create() {
       return;
     }
     self.form_open = true;
@@ -868,6 +878,7 @@ impl Render for Workspace {
           this.close_form(window, cx);
         }
       }))
+      .on_action(cx.listener(|this, _: &NewWorktree, window, cx| this.open_form(window, cx)))
       .size_full()
       .relative()
       .flex()
@@ -891,11 +902,11 @@ impl Render for Workspace {
           .flex()
           .when(self.sidebar_open, |body| {
             body.child(sidebar::sidebar(
-              self.state.worktrees(),
+              &self.state,
               selected,
               ages,
-              self.state.live(),
               &self.sidebar_scroll,
+              self.form_open,
               cx,
             ))
           })

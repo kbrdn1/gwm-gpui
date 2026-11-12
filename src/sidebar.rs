@@ -1,5 +1,6 @@
-//! The sidebar: the repo's project picker, then its worktrees in dense rows, grouped the way
-//! Monocode groups sessions (`shell/sidebar_list.rs`, `shell.rs` session rows).
+//! The sidebar: the repo's project picker, the "New" row, then its worktrees
+//! in dense rows, grouped the way Monocode groups sessions
+//! (`shell/sidebar_list.rs`, `shell.rs` session rows).
 
 use std::path::Path;
 
@@ -12,7 +13,7 @@ use crate::{
   project_picker::ProjectPicker,
   sessions::{self, Carried, Mark},
   theme,
-  workspace::{Place, Workspace, order, place},
+  workspace::{Place, State, Workspace, order, place},
 };
 
 pub(crate) struct Section {
@@ -75,14 +76,16 @@ pub(crate) fn child_of(
     .position(|child| matches!(child, Child::Worktree(index) if worktrees[*index].path == selected))
 }
 
+/// `form_open`: the "New worktree" form is shown, which the "New" row says.
 pub(crate) fn sidebar(
-  worktrees: &[Worktree],
+  state: &State,
   selected: Option<&Worktree>,
   ages: Ages,
-  live: bool,
   scroll: &ScrollHandle,
+  form_open: bool,
   cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
+  let (worktrees, live) = (state.worktrees(), state.live());
   let main = worktrees.iter().find(|worktree| worktree.is_main);
   // One element per child, in `children`'s order: a child's position is the
   // index `scroll_to_item` takes. A loop, not a `map`: every row borrows `cx`
@@ -128,7 +131,54 @@ pub(crate) fn sidebar(
       name: main.name.clone(),
       branch: main.branch.clone(),
     }))
+    // Monocode's navigation block. No list yet, no "New": nothing would tell
+    // the new worktree apart, and the title bar has no `+` either.
+    .when(state.can_create(), |sidebar| {
+      sidebar.child(
+        div()
+          .flex_none()
+          .px(px(8.))
+          .pt(px(4.))
+          .pb(px(12.))
+          .child(new_row(form_open, cx)),
+      )
+    })
     .child(list)
+}
+
+/// Monocode's "New" navigation row (`sidebar_navigation`): its glyph, the
+/// word, and at the right the shortcut that does the same. It opens the
+/// "New worktree" form, and stands selected while the form is shown.
+fn new_row(form_open: bool, cx: &mut Context<Workspace>) -> impl IntoElement {
+  div()
+    .id("new-worktree-row")
+    .h(theme::NAV_ROW_HEIGHT)
+    .px(px(8.))
+    .flex()
+    .items_center()
+    .gap(px(8.))
+    .rounded(theme::CONTROL_RADIUS)
+    .cursor_pointer()
+    .text_size(px(14.))
+    .font_weight(FontWeight::MEDIUM)
+    .text_color(theme::ink(if form_open { 1. } else { 0.5 }))
+    .when(form_open, |row| row.bg(theme::selected()))
+    .hover(|row| row.bg(theme::selected()).text_color(theme::ink(1.)))
+    .on_click(cx.listener(|workspace, _, window, cx| workspace.open_form(window, cx)))
+    .child(icon(assets::NEW, 16., theme::ink(if form_open { 0.7 } else { 0.35 })))
+    .child(div().flex_1().child("New"))
+    .child(
+      div()
+        .w(theme::NAV_TRAILING_SLOT)
+        .flex_none()
+        .flex()
+        .justify_center()
+        .whitespace_nowrap()
+        .text_size(px(11.))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(theme::ink(0.35))
+        .child(crate::shortcut(crate::NEW_WORKTREE_KEY)),
+    )
 }
 
 fn section_title(title: &'static str) -> impl IntoElement {

@@ -21,7 +21,8 @@ mod title_bar;
 pub mod workspace;
 
 use gpui::{
-  App, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowOptions, point, px, size,
+  App, Bounds, KeyBinding, Keystroke, OperatingSystem, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
+  WindowOptions, point, px, size,
 };
 
 pub use landing::Landing;
@@ -50,12 +51,30 @@ pub fn window_options(cx: &App) -> WindowOptions {
   }
 }
 
+/// Opens the "New worktree" form. macOS's own key for File > New: ⌘T, which
+/// Monocode's "New" row shows, is a new tab there, and this window has one.
+pub const NEW_WORKTREE_KEY: &str = "cmd-n";
+
+/// A binding's keys as macOS writes them in a menu ("⌘N"), for a row to show
+/// the shortcut that does the same.
+pub(crate) fn shortcut(keys: &'static str) -> String {
+  Keystroke::parse(keys).map_or_else(
+    |_| keys.to_owned(),
+    |keystroke| keystroke.display(OperatingSystem::Mac).to_string(),
+  )
+}
+
 pub fn bind_keys(cx: &mut App) {
+  cx.bind_keys(bindings());
+}
+
+fn bindings() -> Vec<KeyBinding> {
   use text_input::{Backspace, Delete, End, Home, Left, Paste, Right, SelectAll};
-  cx.bind_keys([
+  vec![
     KeyBinding::new("down", workspace::SelectNext, Some("Workspace")),
     KeyBinding::new("up", workspace::SelectPrevious, Some("Workspace")),
     KeyBinding::new("escape", workspace::CloseForm, Some("Workspace")),
+    KeyBinding::new(NEW_WORKTREE_KEY, workspace::NewWorktree, Some("Workspace")),
     KeyBinding::new("enter", create_form::Submit, Some("CreateForm")),
     KeyBinding::new("tab", create_form::NextField, Some("CreateForm")),
     KeyBinding::new("backspace", Backspace, Some("TextInput")),
@@ -71,5 +90,52 @@ pub fn bind_keys(cx: &mut App) {
     KeyBinding::new("down", End, Some("TextInput")),
     KeyBinding::new("cmd-a", SelectAll, Some("TextInput")),
     KeyBinding::new("cmd-v", Paste, Some("TextInput")),
-  ]);
+  ]
+}
+
+#[cfg(test)]
+mod tests {
+  use gpui::{Action, KeyContext, Keymap};
+
+  use super::*;
+
+  /// What `keys` do with the focus in the innermost of `contexts`, outermost
+  /// first: the keymap's own resolution, as a window runs it.
+  fn bound(keys: &'static str, contexts: &[&str]) -> Option<Box<dyn Action>> {
+    let stack: Vec<_> = contexts
+      .iter()
+      .map(|context| KeyContext::parse(context).unwrap())
+      .collect();
+    let (found, _) = Keymap::new(bindings()).bindings_for_input(&[Keystroke::parse(keys).unwrap()], &stack);
+    found.first().map(|binding| binding.action().boxed_clone())
+  }
+
+  fn does(keys: &'static str, contexts: &[&str], action: &dyn Action) -> bool {
+    bound(keys, contexts).is_some_and(|bound| bound.partial_eq(action))
+  }
+
+  /// The "New" row shows a shortcut: it is the one bound, from the list as
+  /// from a field, and the row words that same key.
+  #[test]
+  fn the_new_row_shows_the_key_that_opens_the_form() {
+    assert!(does(NEW_WORKTREE_KEY, &["Workspace"], &workspace::NewWorktree));
+    assert!(does(
+      NEW_WORKTREE_KEY,
+      &["Workspace", "CreateForm", "TextInput"],
+      &workspace::NewWorktree
+    ));
+    assert_eq!(shortcut(NEW_WORKTREE_KEY), "⌘N");
+  }
+
+  /// What was bound before still is: the list's keys, and a field's own.
+  #[test]
+  fn the_list_and_a_field_keep_their_keys() {
+    assert!(does("down", &["Workspace"], &workspace::SelectNext));
+    assert!(does("up", &["Workspace"], &workspace::SelectPrevious));
+    assert!(does("escape", &["Workspace"], &workspace::CloseForm));
+    let field = ["Workspace", "CreateForm", "TextInput"];
+    assert!(does("down", &field, &text_input::End));
+    assert!(does("up", &field, &text_input::Home));
+    assert!(does("enter", &field, &create_form::Submit));
+  }
 }
