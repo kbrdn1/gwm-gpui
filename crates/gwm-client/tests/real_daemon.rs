@@ -1,7 +1,8 @@
 //! [`watch`] against a real `gwm daemon`, on throwaway repos. These tests need
 //! `gwm` on the PATH and fail without it, never skip: CI installs a pinned
 //! release (`.github/workflows/ci.yml`). Every socket is passed explicitly, so
-//! a daemon the user runs on the default socket is never touched.
+//! a daemon the user runs on the default socket is never touched, and every
+//! test calls [`isolate`] first, so gwm reads and writes none of the user's files.
 
 use std::{
   fs,
@@ -9,7 +10,10 @@ use std::{
   os::unix::net::{UnixListener, UnixStream},
   path::{Path, PathBuf},
   process::{Child, Command, Stdio},
-  sync::mpsc::{self, Receiver},
+  sync::{
+    Once,
+    mpsc::{self, Receiver},
+  },
   thread,
   time::Duration,
 };
@@ -21,6 +25,25 @@ use gwm_client::{
 use tempfile::TempDir;
 
 const WAIT: Duration = Duration::from_secs(20);
+
+/// Points gwm's undo journal and trust ledger at files under cargo's
+/// per-target scratch directory and leaves the user's global config out,
+/// before anything in this binary runs gwm.
+fn isolate() {
+  static ONCE: Once = Once::new();
+  ONCE.call_once(|| {
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("gwm-client-real-daemon");
+    fs::create_dir_all(&scratch).unwrap();
+    // SAFETY: every test calls `isolate` before it spawns a process or reads
+    // the environment, and `Once` holds the others until this returns, so no
+    // thread reads the environment while it is written. Nothing writes it after.
+    unsafe {
+      std::env::set_var("GWM_HISTORY_FILE", scratch.join("history.toml"));
+      std::env::set_var("GWM_TRUST_LEDGER", scratch.join("trust-ledger.toml"));
+      std::env::set_var("GWM_NO_GLOBAL_CONFIG", "1");
+    }
+  });
+}
 
 fn git(dir: &Path, args: &[&str]) {
   let status = Command::new("git")
@@ -122,6 +145,7 @@ fn sockets(dir: &TempDir, own: bool) -> Sockets {
 
 #[test]
 fn starts_its_own_daemon_follows_changes_and_stops_it() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
   let sockets = sockets(&dir, true);
@@ -148,6 +172,7 @@ fn starts_its_own_daemon_follows_changes_and_stops_it() {
 
 #[test]
 fn uses_the_daemon_left_on_its_own_socket() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
   let sockets = sockets(&dir, true);
@@ -167,6 +192,7 @@ fn uses_the_daemon_left_on_its_own_socket() {
 
 #[test]
 fn uses_a_daemon_already_serving_the_repo_from_any_folder_of_it() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
   fs::create_dir(acme.join("src")).unwrap();
@@ -189,6 +215,7 @@ fn uses_a_daemon_already_serving_the_repo_from_any_folder_of_it() {
 
 #[test]
 fn skips_a_daemon_serving_another_repo() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let (acme, other) = (repo(dir.path(), "acme"), repo(dir.path(), "other"));
   let sockets = sockets(&dir, true);
@@ -209,6 +236,7 @@ fn skips_a_daemon_serving_another_repo() {
 /// the outer repo, though its path starts with the outer one's.
 #[test]
 fn skips_the_daemon_of_the_repo_it_is_nested_in() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
   fs::create_dir(acme.join("vendor")).unwrap();
@@ -232,6 +260,7 @@ fn skips_the_daemon_of_the_repo_it_is_nested_in() {
 /// next socket, it does not stop it.
 #[test]
 fn moves_past_a_daemon_it_cannot_read_on_the_shared_socket() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
   let sockets = sockets(&dir, true);
@@ -252,6 +281,7 @@ fn moves_past_a_daemon_it_cannot_read_on_the_shared_socket() {
 /// drift, shown to the user, never a list parsed in silence.
 #[test]
 fn a_contract_it_cannot_read_on_its_own_socket_ends_the_watch() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
   let sockets = sockets(&dir, true);
@@ -267,6 +297,7 @@ fn a_contract_it_cannot_read_on_its_own_socket_ends_the_watch() {
 /// git names no toplevel in a bare repo, but gwm can still list it.
 #[test]
 fn a_repo_git_cannot_locate_still_gets_one_gwm_list() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let status = Command::new("git")
     .args(["init", "-q", "--bare", "acme.git"])
@@ -284,6 +315,7 @@ fn a_repo_git_cannot_locate_still_gets_one_gwm_list() {
 
 #[test]
 fn one_own_socket_per_repo_whichever_worktree_it_is_opened_from() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
   git(&acme, &["worktree", "add", "-q", "../feat-1", "-b", "feat/#1-x"]);
@@ -296,6 +328,7 @@ fn one_own_socket_per_repo_whichever_worktree_it_is_opened_from() {
 
 #[test]
 fn falls_back_to_one_gwm_list_when_no_daemon_can_be_had() {
+  isolate();
   let dir = tempfile::tempdir().unwrap();
   let acme = repo(dir.path(), "acme");
   let spawned = Spawned::default();
