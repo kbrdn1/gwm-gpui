@@ -461,10 +461,11 @@ impl Drop for Watch {
 }
 
 impl Workspace {
-  /// Follows the repo at `repo` live (see [`watch::watch`]), until the view is
-  /// dropped: the watch then ends, at once with the daemon it started, on the
-  /// next change in the repo with a daemon it found running, which stays.
-  /// `spawned` holds the one it starts, for the app to stop on quit too.
+  /// Follows the repo at `repo` live (see [`watch::watch`]) for as long as the
+  /// view lives. Once it is dropped, the watch ends: at once when it started
+  /// its daemon, which is stopped; at the repo's next change when it found one
+  /// running, which is left as it is. `spawned` holds the daemon it starts, for
+  /// the app to stop on quit as well.
   pub fn new(repo: PathBuf, spawned: Spawned, cx: &mut Context<Self>) -> Self {
     let (events, received) = async_channel::unbounded();
     let watched = repo.clone();

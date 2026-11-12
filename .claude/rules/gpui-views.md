@@ -5,7 +5,7 @@ paths:
 # Vues GPUI — conventions
 
 - Jamais d'appel bloquant dans `render` ni sur le thread UI : un subprocess ou une I/O ponctuels passent par `cx.background_spawn`, puis `this.update(cx, …)` et `cx.notify()`.
-- Un flux qui bloque toute la vie de l'app (`gwm_client::watch` sur le socket du daemon) a son propre thread et passe ses événements à la vue par un `async-channel` : sur l'exécuteur de fond, il immobiliserait un worker pour de bon. Modèle : `Workspace::new` dans `src/workspace.rs`.
+- Un flux qui bloque toute la vie d'une vue (`gwm_client::watch` sur le socket du daemon) a son propre thread et passe ses événements à la vue par un `async-channel` : sur l'exécuteur de fond, il immobiliserait un worker pour de bon. Il finit avec la vue : son `Drop` lève un drapeau que le flux teste, puis arrête ce que le flux a lancé, dans cet ordre. Modèle : `Workspace::new` et `Watch` dans `src/workspace.rs`.
 - `render` ne fait que lire l'état. Un changement d'état sans `cx.notify()` ne repeint rien, sans aucune erreur.
 - Une couleur vit dans `src/theme.rs`, jamais dans une vue (ni hex, ni `hsla`, ni `white()`). Surfaces, opacités, rayons et tailles suivent Monocode Native ; l'accent (un seul token) et les couleurs d'état suivent le preset `claude-dark` de gwm-cli.
 - Pas de bouton sans fonction : un chevron de menu, une recherche ou des flèches de navigation qui ne font rien sont des données inventées.
