@@ -173,10 +173,14 @@ fn main() -> Result<(), Box<dyn Error>> {
       .into_iter()
       .filter(|other| *other != window.into()),
   );
-  let images: Vec<_> = windows
-    .into_iter()
-    .map(|window| cx.capture_screenshot(window))
-    .collect();
+  let images: Vec<_> = windows.iter().map(|window| cx.capture_screenshot(*window)).collect();
+  // The views first, which tells their watches to stop, then the daemons: a
+  // watch still running starts another daemon a second after it loses its
+  // own, and the process would leave that one behind.
+  for window in windows {
+    let _ = cx.update_window(window, |_, window, _| window.remove_window());
+  }
+  cx.run_until_parked();
   daemons.borrow().iter().for_each(Spawned::stop);
   for (index, image) in images.into_iter().enumerate() {
     let path = match index {
