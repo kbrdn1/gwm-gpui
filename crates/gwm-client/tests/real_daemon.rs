@@ -11,11 +11,12 @@ use std::{
   path::{Path, PathBuf},
   process::{Child, Command, Stdio},
   sync::{
-    Once,
+    Arc, Once,
+    atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver},
   },
   thread,
-  time::Duration,
+  time::{Duration, Instant},
 };
 
 use gwm_client::{
@@ -106,10 +107,42 @@ impl Drop for StopOnDrop {
 
 /// Runs [`watch`] on a thread and hands its events over a channel.
 fn start_watch(path: &Path, sockets: Sockets, spawned: &Spawned) -> (Receiver<Event>, thread::JoinHandle<()>) {
+  start_stoppable_watch(path, sockets, spawned, &Arc::default())
+}
+
+/// [`start_watch`] with the app's off switch: once `stopped` is set, the next
+/// event ends the watch.
+fn start_stoppable_watch(
+  path: &Path,
+  sockets: Sockets,
+  spawned: &Spawned,
+  stopped: &Arc<AtomicBool>,
+) -> (Receiver<Event>, thread::JoinHandle<()>) {
   let (events, received) = mpsc::channel();
-  let (path, spawned) = (path.to_owned(), spawned.clone());
-  let handle = thread::spawn(move || watch(&path, |_| sockets, &spawned, |event| events.send(event).is_ok()));
+  let (path, spawned, stopped) = (path.to_owned(), spawned.clone(), stopped.clone());
+  let handle = thread::spawn(move || {
+    watch(
+      &path,
+      |_| sockets,
+      &spawned,
+      |event| !stopped.load(Ordering::Relaxed) && events.send(event).is_ok(),
+    );
+  });
   (received, handle)
+}
+
+/// Joins a watch that should be over, without hanging on one that is not.
+fn ends_within(handle: thread::JoinHandle<()>, limit: Duration) {
+  let deadline = Instant::now() + limit;
+  while !handle.is_finished() {
+    assert!(
+      Instant::now() < deadline,
+      "the watch still runs {} s after it was told to stop",
+      limit.as_secs()
+    );
+    thread::sleep(Duration::from_millis(20));
+  }
+  handle.join().unwrap();
 }
 
 /// A fake daemon on `socket` that answers one `subscribe` with `line`.
@@ -253,6 +286,75 @@ fn skips_the_daemon_of_the_repo_it_is_nested_in() {
   drop(events);
   spawned.stop();
   handle.join().unwrap();
+}
+
+/// A window that leaves a repo: the watch is told to stop, then its daemon is
+/// stopped. In that order, or the watch starts another a second later.
+#[test]
+fn a_watch_told_to_stop_ends_with_its_daemon_and_starts_no_other() {
+  isolate();
+  let dir = tempfile::tempdir().unwrap();
+  let acme = repo(dir.path(), "acme");
+  let sockets = sockets(&dir, true);
+  let own = sockets.own.clone().unwrap();
+  let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
+  let stopped = Arc::new(AtomicBool::new(false));
+  let (events, handle) = start_stoppable_watch(&acme, sockets, &spawned, &stopped);
+  assert_eq!(next(&events), Event::Source(Source::OwnDaemon(own.clone())));
+  assert_eq!(snapshot(&events), ["acme"]);
+
+  stopped.store(true, Ordering::Relaxed);
+  spawned.stop();
+  ends_within(handle, Duration::from_secs(5));
+  assert!(UnixStream::connect(&own).is_err(), "no daemon was started in its place");
+  assert!(
+    !events.try_iter().any(|event| matches!(event, Event::Source(_))),
+    "a stopped watch does not say it lost its daemon, nor look for another"
+  );
+}
+
+/// Told to stop while its daemon was still starting: the stop found no daemon
+/// to stop, and the watch ends on that daemon's first word.
+#[test]
+fn a_watch_that_ends_stops_the_daemon_it_started() {
+  isolate();
+  let dir = tempfile::tempdir().unwrap();
+  let acme = repo(dir.path(), "acme");
+  let sockets = sockets(&dir, true);
+  let own = sockets.own.clone().unwrap();
+  let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
+  let stopped = Arc::new(AtomicBool::new(true));
+  let (_events, handle) = start_stoppable_watch(&acme, sockets, &spawned, &stopped);
+
+  ends_within(handle, WAIT);
+  assert!(UnixStream::connect(&own).is_err(), "its daemon went with it");
+}
+
+/// A daemon the user runs is not the app's to stop. The watch has nothing to
+/// lose its stream, so it only ends when that daemon next speaks.
+#[test]
+fn a_watch_told_to_stop_leaves_the_users_daemon_running() {
+  isolate();
+  let dir = tempfile::tempdir().unwrap();
+  let acme = repo(dir.path(), "acme");
+  let sockets = sockets(&dir, true);
+  let _user = UserDaemon::start(&acme, &sockets.default);
+  let (default, own) = (sockets.default.clone(), sockets.own.clone().unwrap());
+  let spawned = Spawned::default();
+  let _stop = StopOnDrop(spawned.clone());
+  let stopped = Arc::new(AtomicBool::new(false));
+  let (events, handle) = start_stoppable_watch(&acme, sockets, &spawned, &stopped);
+  assert_eq!(next(&events), Event::Source(Source::Daemon(default.clone())));
+  assert_eq!(snapshot(&events), ["acme"]);
+
+  stopped.store(true, Ordering::Relaxed);
+  spawned.stop();
+  git(&acme, &["worktree", "add", "-q", "../feat-1", "-b", "feat/#1-x"]);
+  ends_within(handle, WAIT);
+  assert!(UnixStream::connect(&default).is_ok(), "the user's daemon still runs");
+  assert!(!own.exists(), "and none was started beside it");
 }
 
 /// What a daemon on a shared socket sends before its first snapshot says

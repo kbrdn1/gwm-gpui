@@ -90,8 +90,9 @@ fn fnv1a(bytes: &[u8]) -> u64 {
   })
 }
 
-/// The `gwm daemon` the app started, if any. A child outlives its parent, so
-/// the app calls [`Spawned::stop`] when it quits.
+/// The `gwm daemon` a [`watch`] started, if any. `watch` stops it when it
+/// returns, but a child outlives its parent: the app calls [`Spawned::stop`]
+/// when it quits, on the watches still running.
 #[derive(Clone, Default)]
 pub struct Spawned(Arc<Mutex<Option<Child>>>);
 
@@ -112,7 +113,25 @@ impl Spawned {
 /// Feeds `on_event` for the repo at `path` until it returns `false`, or until
 /// there is nothing more to say: a fallback list, or a failure. `sockets` names
 /// where to look once the repo is located. Blocks: run it on a thread of its own.
+///
+/// It only learns that `on_event` wants no more when it has an event to hand
+/// over, and it looks for a daemon again a second after it loses one. So to end
+/// it from outside, have `on_event` return `false` first, then stop its daemon
+/// ([`Spawned::stop`]): the other way round, it starts another. On a daemon it
+/// did not start, it ends when that daemon next speaks.
 pub fn watch(
+  path: &Path,
+  sockets: impl FnOnce(&Repo) -> Sockets,
+  spawned: &Spawned,
+  on_event: impl FnMut(Event) -> bool,
+) {
+  follow_repo(path, sockets, spawned, on_event);
+  // Nothing follows the daemon it started any more, and one that came up
+  // after the caller's own stop is still running.
+  spawned.stop();
+}
+
+fn follow_repo(
   path: &Path,
   sockets: impl FnOnce(&Repo) -> Sockets,
   spawned: &Spawned,
