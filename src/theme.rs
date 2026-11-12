@@ -65,6 +65,12 @@ pub const CONTROL_RADIUS: Pixels = px(6.);
 /// Monocode's 24 px chrome button (`chrome_button` in its `theme.rs`): the
 /// header's magnifier.
 pub const CHROME_BUTTON: Pixels = px(24.);
+/// Monocode's "Working" panel (`shell/live_agents.rs`): its corners
+/// (Tailwind's `rounded-lg`), and the height its cards scroll in. Four whole
+/// cards, the most Monocode shows at once (`LIVE_AGENT_CAP`), and half of a
+/// fifth, which says there are more.
+pub const WORKING_RADIUS: Pixels = px(8.);
+pub const WORKING_MAX_HEIGHT: Pixels = px(220.);
 /// The column a navigation row keeps for its shortcut, centred on the axis
 /// of the header's buttons above it (`TRAILING_SLOT`).
 pub const NAV_TRAILING_SLOT: Pixels = px(14.);
@@ -92,6 +98,27 @@ pub fn card_border() -> Hsla {
 /// mixed into the surface at 14%.
 pub fn rail() -> Hsla {
   ink(0.14)
+}
+
+/// The "Working" panel's fill, over the sidebar's wash, and a hovered card
+/// in it (`shell/live_agents.rs`).
+pub fn working() -> Hsla {
+  ink(0.05)
+}
+
+pub fn working_hover() -> Hsla {
+  ink(0.08)
+}
+
+/// The glow of the panel's dot: its own colour, blurred 8 px around it.
+pub fn glow(color: Hsla) -> Vec<BoxShadow> {
+  vec![BoxShadow {
+    color,
+    offset: point(px(0.), px(0.)),
+    blur_radius: px(8.),
+    spread_radius: px(0.),
+    inset: false,
+  }]
 }
 
 /// A hovered row or button.

@@ -30,6 +30,9 @@ assets/icons/LICENSE-MONOCODE):
   the time's place while the agent works (shell/rails.rs, activity.rs
   rail_from, shell.rs session_row_with and session_suffix, theme.rs
   rail_color);
+- src/working.rs takes its "Working" card of live agents: the header with
+  a dot, the word and a count, a card per working session and their
+  metrics, the cap of four cards shown at once (shell/live_agents.rs);
 - src/age.rs reimplements its relative time format and day buckets
   (crates/monocode-core/src/time.rs, shell/sidebar_list.rs);
 - src/workspace.rs lays out its rounded-card frame, and paints the card's

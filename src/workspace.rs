@@ -675,9 +675,9 @@ impl Workspace {
     }
   }
 
-  /// Reveals a selection made from outside the list: a worktree just
-  /// created. What was just selected must show, so a filter that hides it is
-  /// cleared, its field left open.
+  /// Reveals a selection that may come from outside the list: a worktree
+  /// just created, a card of the "Working" panel. What was just selected must
+  /// show, so a filter that hides it is cleared, its field left open.
   fn show_selection(&mut self, cx: &mut Context<Self>) {
     if self.state.hides_selection() {
       self.clear_filter(cx);
@@ -736,13 +736,15 @@ impl Workspace {
     }
   }
 
-  /// A click on a sidebar row: the user moves on, and the form closes. The
-  /// row is revealed like one the keyboard reaches: the sessions nested under
-  /// the row left behind fold, and one above the clicked row takes it up the
-  /// list by its height, out of view if the list was scrolled.
+  /// A click on a sidebar row, or on a card of the "Working" panel: the user
+  /// moves on, and the form closes. The row is revealed like one the keyboard
+  /// reaches: the sessions nested under the row left behind fold, and one
+  /// above the clicked row takes it up the list by its height, out of view if
+  /// the list was scrolled. A card's worktree may be one the filter hides,
+  /// which a row never is: the filter is then cleared.
   pub(crate) fn select(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
     self.state.select(path);
-    self.reveal_selection();
+    self.show_selection(cx);
     if self.form_open {
       self.close_form(window, cx);
     }

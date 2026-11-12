@@ -1,7 +1,7 @@
 //! The sidebar: the repo's project picker and the filter's magnifier, the
 //! filter's field once open, the "New" row, then its worktrees in dense rows,
 //! grouped the way Monocode groups sessions (`shell/sidebar_list.rs`,
-//! `shell.rs` session rows).
+//! `shell.rs` session rows), and under them the "Working" panel.
 
 use std::path::Path;
 
@@ -15,7 +15,7 @@ use crate::{
   project_picker::ProjectPicker,
   sessions::{self, Carried, Mark},
   text_input::TextInput,
-  theme,
+  theme, working,
   workspace::{Place, State, Workspace, order, place},
 };
 
@@ -182,6 +182,11 @@ pub(crate) fn sidebar(
         }),
     )
     .child(list)
+    // Under the list, as in Monocode: nothing when no session is active.
+    .children(
+      working::working(worktrees, live)
+        .map(|working| working::panel(working, selected.map(|selected| selected.path.as_path()), cx)),
+    )
 }
 
 /// Monocode's "New" navigation row (`sidebar_navigation`): its glyph, the

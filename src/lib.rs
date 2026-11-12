@@ -19,6 +19,7 @@ mod status_bar;
 mod text_input;
 pub mod theme;
 mod title_bar;
+mod working;
 pub mod workspace;
 
 use gpui::{
