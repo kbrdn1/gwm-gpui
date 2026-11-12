@@ -40,8 +40,9 @@ impl Entry {
 pub struct Projects {
   /// Those whose folder still exists, most recent first.
   pub recent: Vec<Entry>,
-  /// A repo's key and its window. A closed window stays until the repo opens
-  /// again: its handle no longer updates, and a new window takes its place.
+  /// A repo's key and its window, one repo per window and one window per
+  /// repo. A closed window stays until the repo opens again: its handle no
+  /// longer updates, and another window takes its place.
   pub windows: Vec<(PathBuf, AnyWindowHandle)>,
 }
 
@@ -55,6 +56,27 @@ impl Projects {
       .iter()
       .find(|(_, handle)| *handle == window)
       .map(|(key, _)| key.as_path())
+  }
+
+  /// The window that shows the repo `key`, which may have been closed since.
+  pub fn window_of(&self, key: &Path) -> Option<AnyWindowHandle> {
+    self
+      .windows
+      .iter()
+      .find(|(open, _)| open == key)
+      .map(|(_, window)| *window)
+  }
+
+  /// `window` now shows the repo `key`, or with `None` a folder git places in
+  /// no repo: the repo it showed before is no longer shown, and no other
+  /// window is left on `key`.
+  pub fn show(&mut self, key: Option<PathBuf>, window: AnyWindowHandle) {
+    self
+      .windows
+      .retain(|(open, shown_in)| *shown_in != window && Some(open) != key.as_ref());
+    if let Some(key) = key {
+      self.windows.push((key, window));
+    }
   }
 }
 
@@ -150,7 +172,7 @@ pub fn shown(entry: Entry) -> Option<Entry> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use super::*;
 
   fn entry(key: &str, path: &str) -> Entry {
@@ -158,6 +180,44 @@ mod tests {
       key: key.into(),
       path: path.into(),
     }
+  }
+
+  /// A window's handle, without the window.
+  pub(crate) fn window(id: u64) -> AnyWindowHandle {
+    gpui::WindowHandle::<crate::Workspace>::new(id.into()).into()
+  }
+
+  #[test]
+  fn a_window_that_switches_shows_its_new_repo_and_no_longer_the_old() {
+    let (here, other) = (window(1), window(2));
+    let mut projects = Projects::default();
+    projects.show(Some("/acme/.git".into()), here);
+    projects.show(Some("/other/.git".into()), other);
+    projects.show(Some("/payments/.git".into()), here);
+    assert_eq!(projects.key_of(here), Some(Path::new("/payments/.git")));
+    assert_eq!(projects.window_of(Path::new("/payments/.git")), Some(here));
+    assert_eq!(projects.window_of(Path::new("/acme/.git")), None);
+    assert_eq!(projects.window_of(Path::new("/other/.git")), Some(other));
+    assert_eq!(projects.windows.len(), 2);
+  }
+
+  #[test]
+  fn a_window_switched_to_a_folder_in_no_repo_shows_no_repo() {
+    let here = window(1);
+    let mut projects = Projects::default();
+    projects.show(Some("/acme/.git".into()), here);
+    projects.show(None, here);
+    assert_eq!(projects.key_of(here), None);
+    assert_eq!(projects.window_of(Path::new("/acme/.git")), None);
+  }
+
+  #[test]
+  fn a_repo_shown_again_leaves_its_closed_window() {
+    let (closed, here) = (window(1), window(2));
+    let mut projects = Projects::default();
+    projects.show(Some("/acme/.git".into()), closed);
+    projects.show(Some("/acme/.git".into()), here);
+    assert_eq!(projects.windows, [(PathBuf::from("/acme/.git"), here)]);
   }
 
   #[test]

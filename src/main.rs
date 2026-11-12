@@ -1,19 +1,16 @@
-use std::{cell::RefCell, path::PathBuf, rc::Rc};
+use std::path::PathBuf;
 
-use gpui::{App, Application, Focusable, KeyBinding, Menu, MenuItem, PathPromptOptions, actions, prelude::*};
+use gpui::{App, Application, KeyBinding, Menu, MenuItem, actions};
 use gwm_client::{Repo, watch::Spawned};
 use gwm_gpui::{
-  OpenFolder, OpenRepo, Workspace,
+  OpenFolder, OpenRepo,
   assets::Assets,
   login_shell,
-  recent::{self, Entry, Projects},
+  open::{self, Daemons, Target},
+  recent::Projects,
 };
 
 actions!(gwm_gpui, [Quit]);
-
-/// The daemons the app started, one holder per window: a window that starts
-/// one must not stop another's. All are stopped on quit.
-type Daemons = Rc<RefCell<Vec<Spawned>>>;
 
 fn main() {
   // The Finder launches the app with launchd's PATH, where `gwm` is not: take
@@ -51,20 +48,22 @@ fn main() {
       .detach();
       cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-o", OpenFolder, None),
+        KeyBinding::new("cmd-o", OpenFolder(Target::NewWindow), None),
       ]);
       gwm_gpui::bind_keys(cx);
       cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
       // The way out of a window on the wrong folder, and into another repo.
       let to_pick = daemons.clone();
-      cx.on_action(move |_: &OpenFolder, cx: &mut App| pick(to_pick.clone(), cx));
-      // A repo from the project menu's recent list.
+      cx.on_action(move |OpenFolder(target): &OpenFolder, cx: &mut App| open::folder(*target, to_pick.clone(), cx));
+      // A repo from the project menu's recent list: in its window, or with ⌘ in another.
       let to_open = daemons.clone();
-      cx.on_action(move |OpenRepo(repo): &OpenRepo, cx: &mut App| open(repo.clone(), &to_open, cx));
+      cx.on_action(move |OpenRepo(repo, target): &OpenRepo, cx: &mut App| {
+        open::repo(repo.clone(), *target, &to_open, cx);
+      });
       cx.set_global(Projects::default());
       cx.set_menus([
         Menu::new("gwm").items([MenuItem::action("Quit gwm", Quit)]),
-        Menu::new("File").items([MenuItem::action("Open…", OpenFolder)]),
+        Menu::new("File").items([MenuItem::action("Open…", OpenFolder(Target::NewWindow))]),
       ]);
       cx.on_window_closed(|cx, _| {
         if cx.windows().is_empty() {
@@ -74,113 +73,11 @@ fn main() {
       .detach();
 
       if let Some(repo) = repo {
-        open(repo, &daemons, cx);
+        open::repo(repo, Target::NewWindow, &daemons, cx);
         return;
       }
       // In front, or the panel opens behind the app that launched this one.
       cx.activate(true);
-      pick(daemons, cx);
+      open::folder(Target::NewWindow, daemons, cx);
     });
-}
-
-/// Asks for a folder and opens it. One that is in no repo opens too: the
-/// window shows what git and gwm make of it, and File > Open… picks another.
-fn pick(daemons: Daemons, cx: &mut App) {
-  let picked = cx.prompt_for_paths(PathPromptOptions {
-    files: false,
-    directories: true,
-    multiple: false,
-    prompt: Some("Open".into()),
-  });
-  cx.spawn(async move |cx| {
-    let folder = picked
-      .await
-      .ok()
-      .and_then(Result::ok)
-      .flatten()
-      .and_then(|paths| paths.into_iter().next());
-    cx.update(|cx| match folder {
-      Some(folder) => open(folder, &daemons, cx),
-      // Cancelled at launch: there is nothing to show.
-      None if cx.windows().is_empty() => cx.quit(),
-      None => {}
-    });
-  })
-  .detach();
-}
-
-/// Opens `repo` in a window of its own, with its own live list, or brings
-/// forward the window already showing it, whichever worktree that one was
-/// opened from. A repo opened is recorded in the recent list. A folder git
-/// does not place (no repo, a bare one) opens all the same, unrecorded.
-fn open(repo: PathBuf, daemons: &Daemons, cx: &mut App) {
-  let daemons = daemons.clone();
-  cx.spawn(async move |cx| {
-    let located = cx
-      .background_spawn({
-        let repo = repo.clone();
-        async move { Repo::locate(&repo).ok() }
-      })
-      .await;
-    cx.update(|cx| {
-      let key = located.as_ref().map(|located| located.common_dir.clone());
-      if let Some(key) = &key {
-        let shown = cx
-          .global::<Projects>()
-          .windows
-          .iter()
-          .find(|(open, _)| open == key)
-          .map(|(_, window)| *window);
-        // A closed window's handle fails to update: the repo opens anew.
-        if shown.is_some_and(|window| window.update(cx, |_, window, _| window.activate_window()).is_ok()) {
-          cx.activate(true);
-          return;
-        }
-      }
-      let window = open_window(repo, &daemons, cx);
-      let (Some(key), Some(located)) = (key, located) else {
-        return;
-      };
-      let projects = cx.global_mut::<Projects>();
-      projects.windows.retain(|(open, _)| *open != key);
-      projects.windows.push((key.clone(), window));
-      let Some(file) = recent_file() else {
-        return;
-      };
-      let entry = Entry {
-        key,
-        path: located.toplevel,
-      };
-      cx.spawn(async move |cx| {
-        let shown = cx.background_spawn(async move { recent::open_in(&file, entry) }).await;
-        cx.update(|cx| {
-          cx.global_mut::<Projects>().recent = shown;
-          cx.refresh_windows();
-        });
-      })
-      .detach();
-    });
-  })
-  .detach();
-}
-
-/// `GWM_GPUI_RECENT` names another file, for a try without touching yours.
-fn recent_file() -> Option<PathBuf> {
-  std::env::var_os("GWM_GPUI_RECENT")
-    .map(PathBuf::from)
-    .or_else(|| std::env::var_os("HOME").map(|home| recent::file_in(home.as_ref())))
-}
-
-fn open_window(repo: PathBuf, daemons: &Daemons, cx: &mut App) -> gpui::AnyWindowHandle {
-  let spawned = Spawned::default();
-  daemons.borrow_mut().push(spawned.clone());
-  let window = cx
-    .open_window(gwm_gpui::window_options(cx), |window, cx| {
-      let workspace = cx.new(|cx| Workspace::new(repo, spawned, cx));
-      window.focus(&workspace.focus_handle(cx), cx);
-      workspace
-    })
-    .expect("the main window opens");
-  cx.activate(true);
-  window.into()
 }

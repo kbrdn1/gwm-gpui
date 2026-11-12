@@ -29,7 +29,7 @@ It is a release build: GPUI compiles again, and takes several GB under `target/`
 
 A Finder launch gets launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), without `gwm` or Homebrew. When `gwm` is not on the `PATH` it was given, the app asks your login shell (`$SHELL -l -i`, so `.zprofile` and `.zshrc`) for its own, and gives up after 5 seconds. The daemon it starts inherits it.
 
-The sidebar's top row names the repo: a click on it lists the repos opened before, most recent first, and "Open folder…". A repo opens in a window of its own, live, so several are followed at once, one per window; a repo already open, from any of its worktrees, brings its window forward instead. The list keeps the last 10 repos, in `~/Library/Application Support/gwm-gpui/recent`, and hides those whose folder is gone.
+The sidebar's top row names the repo: a click on it lists the repos opened before, most recent first, and "Open folder…". A click on a repo, or a folder picked through "Open folder…", takes the place of the repo the window showed. With ⌘ held, it opens in a new window instead, so several repos are followed at once, one per window. A repo another window already shows, from any of its worktrees, brings that window forward. The list keeps the last 10 repos, in `~/Library/Application Support/gwm-gpui/recent`, and hides those whose folder is gone.
 
 Up and down move the selection; a click selects a worktree. The title bar's sidebar button hides the sidebar. In the selected worktree's card, "Open in…" lists the editors and terminals installed in `/Applications`, `~/Applications` and the system's Utilities, and "Remove…" removes the worktree through gwm, keeping its branch, once you confirm.
 
@@ -54,10 +54,12 @@ A `gwm daemon` serves one repo, and its default socket is shared by every repo. 
 
 1. uses a daemon on gwm's default socket, but only once its first snapshot lists the worktree the app was opened in;
 2. else uses a daemon on its own socket for this repo, `gwm-gpui-<hash>.sock` in the same directory as gwm's default socket (`$XDG_RUNTIME_DIR`, else `$TMPDIR`). The hash is of the repo's common git directory, so every worktree of the repo shares it;
-3. else starts `gwm daemon` on that socket, and stops it when the app quits;
+3. else starts `gwm daemon` on that socket, and stops it when its window closes or shows another repo, or when the app quits;
 4. else, or when git cannot locate the repo (a bare one), lists the worktrees once with `gwm list --format=json`.
 
 The status bar says which: live, reconnecting after a lost stream, or not live and why. If the app is killed instead of quit, the daemon it started keeps running: the next launch uses it, but does not own it, so it runs until you stop it.
+
+A daemon the app did not start is never stopped. When a window closes or shows another repo, the app only lets go of that daemon's stream at the repo's next change.
 
 It does not link the `gwm-cli` crate: its `[lib]` target is an internal test seam, [not covered by SemVer](https://github.com/kbrdn1/gwm-cli/blob/main/docs/6.development/3.stability.md).
 

@@ -19,6 +19,7 @@ use std::{
   os::unix::ffi::OsStrExt,
   path::{Path, PathBuf},
   process::{Command, Stdio},
+  sync::{Mutex, PoisonError},
 };
 
 use serde::Deserialize;
@@ -112,6 +113,10 @@ pub fn list(repo: &Path) -> Result<Vec<Worktree>, String> {
   parse(&output.stdout)
 }
 
+/// Held by the removal under way: one at a time in this process.
+// ponytail: one lock for every repo; one per repo if a slow removal ever holds up another repo's.
+static REMOVING: Mutex<()> = Mutex::new(());
+
 /// Removes the worktree at `selected` with `gwm remove`, keeping its branch.
 /// `repo` is where the app was opened: gwm runs there. The error is a message
 /// for the user, gwm's stderr as is when gwm fails.
@@ -124,7 +129,12 @@ pub fn list(repo: &Path) -> Result<Vec<Worktree>, String> {
 /// `confirmed_dirty`: the user was told uncommitted changes would be lost. If
 /// they were not, and the worktree has some now (or gwm cannot tell), nothing
 /// is removed: the confirmation was for another state.
+///
+/// One removal at a time, from the list to gwm's return. A second one asked
+/// for the same worktree then lists it gone and stops there. Run alongside,
+/// it could list it, then name it to gwm once the first had removed it.
 pub fn remove(repo: &Path, selected: &Path, confirmed_dirty: bool) -> Result<(), String> {
+  let _one_at_a_time = REMOVING.lock().unwrap_or_else(PoisonError::into_inner);
   let opened_in = Repo::locate(repo).ok().map(|repo| repo.toplevel);
   let fresh = list(repo)?;
   let name = removable(&fresh, selected, opened_in.as_deref(), confirmed_dirty)?;
@@ -205,7 +215,27 @@ fn parse(json: &[u8]) -> Result<Vec<Worktree>, String> {
 
 #[cfg(test)]
 mod tests {
+  use std::{sync::mpsc, thread, time::Duration};
+
   use super::*;
+
+  #[test]
+  fn a_second_removal_waits_for_the_one_under_way() {
+    let first = REMOVING.lock().unwrap_or_else(PoisonError::into_inner);
+    let (done, finished) = mpsc::channel();
+    let second = thread::spawn(move || {
+      // No repo there: it fails as soon as it runs.
+      let result = remove(Path::new("/no/such/repo"), Path::new("/no/such/repo/feat-1"), false);
+      let _ = done.send(());
+      result
+    });
+    assert!(
+      finished.recv_timeout(Duration::from_millis(300)).is_err(),
+      "it ran while the first was under way"
+    );
+    drop(first);
+    assert!(second.join().unwrap().is_err());
+  }
 
   /// The real entry of `parses_the_real_output_of_gwm`, as parsed.
   fn fix_57() -> Worktree {

@@ -1,8 +1,9 @@
 //! The sidebar's project row and its menu: the repos opened before, the
 //! window's own checked, then "Open folder…". After Monocode's sidebar project
 //! header and its project picker (`shell.rs`, `pickers.rs` ProjectPicker).
-//! A repo opens in a window of its own, each with its live list; one already
-//! open is brought to the front.
+//! A click shows the repo in the window, in place of the one it showed; a
+//! ⌘-click opens it in a window of its own. One another window shows already
+//! is brought to the front.
 
 use std::path::{Path, PathBuf};
 
@@ -11,16 +12,23 @@ use gpui::{
 };
 
 use crate::{
-  OpenFolder, assets,
+  assets,
+  open::Target,
   recent::{Entry, Projects},
   sidebar::{icon, one_line},
   theme,
 };
 
-/// Opens the repo at this path, or brings its window to the front.
+/// Opens the repo at this path where the target says, or brings the window
+/// that shows it to the front.
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = gwm_gpui, no_json)]
-pub struct OpenRepo(pub PathBuf);
+pub struct OpenRepo(pub PathBuf, pub Target);
+
+/// Asks for a folder, then opens it where the target says.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = gwm_gpui, no_json)]
+pub struct OpenFolder(pub Target);
 
 const WIDTH: f32 = 286.;
 
@@ -149,9 +157,10 @@ fn menu(recent: &[Entry], current: Option<&Path>, open: &gpui::Entity<bool>) -> 
     item("project-open-folder")
       .text_color(theme::ink(0.75))
       .hover(|item| item.bg(theme::selected()).text_color(theme::ink(1.)))
-      .on_click(move |_, window, cx| {
+      .on_click(move |click, window, cx| {
         close.update(cx, |open, cx| set(open, false, cx));
-        window.dispatch_action(OpenFolder.boxed_clone(), cx);
+        let target = Target::of_click(click.modifiers(), window.window_handle());
+        window.dispatch_action(OpenFolder(target).boxed_clone(), cx);
       })
       .child(slot(icon(assets::FOLDER, 14., theme::ink(0.75))))
       .child("Open folder…"),
@@ -184,9 +193,10 @@ fn row(index: usize, entry: &Entry, current: bool, open: &gpui::Entity<bool>) ->
   item(SharedString::from(format!("project-recent-{index}")))
     .text_color(theme::ink(0.75))
     .hover(|item| item.bg(theme::hover()).text_color(theme::ink(1.)))
-    .on_click(move |_, window, cx| {
+    .on_click(move |click, window, cx| {
       open.update(cx, |open, cx| set(open, false, cx));
-      window.dispatch_action(OpenRepo(path.clone()).boxed_clone(), cx);
+      let target = Target::of_click(click.modifiers(), window.window_handle());
+      window.dispatch_action(OpenRepo(path.clone(), target).boxed_clone(), cx);
     })
     .child(slot(if current {
       icon(assets::CHECK, 14., theme::ink(1.)).into_any_element()

@@ -2,7 +2,15 @@
 //! views sit in. The frame is Monocode's rounded card: a washed chrome (title
 //! bar, sidebar, gutter, status bar) around an unwashed, rounded central card.
 
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{
+  collections::HashMap,
+  path::PathBuf,
+  sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+  },
+  time::Duration,
+};
 
 use gpui::{
   App, Context, FocusHandle, Focusable, MouseButton, PathBuilder, Pixels, PromptLevel, ScrollHandle, SharedString,
@@ -429,19 +437,48 @@ pub struct Workspace {
   form_open: bool,
   sidebar_scroll: ScrollHandle,
   focus: FocusHandle,
+  /// Ends the watch, and the daemon it started, when the view goes.
+  _watch: Watch,
+}
+
+/// The off switch of a view's watch, and the daemon that watch started.
+/// Dropped with the view, when its window closes or shows another repo.
+#[derive(Default)]
+struct Watch {
+  stopped: Arc<AtomicBool>,
+  spawned: Spawned,
+}
+
+impl Drop for Watch {
+  fn drop(&mut self) {
+    // The watch first, then its daemon: a watch still running looks for a
+    // daemon a second after it loses one, and starts another.
+    self.stopped.store(true, Ordering::Relaxed);
+    // The kill waits for the daemon to exit: off the UI thread.
+    let spawned = self.spawned.clone();
+    std::thread::spawn(move || spawned.stop());
+  }
 }
 
 impl Workspace {
-  /// Follows the repo at `repo` live (see [`watch::watch`]). A daemon it starts is
-  /// kept in `spawned`, for the app to stop on quit.
+  /// Follows the repo at `repo` live (see [`watch::watch`]) for as long as the
+  /// view lives. Once it is dropped, the watch ends: at once when it started
+  /// its daemon, which is stopped; at the repo's next change when it found one
+  /// running, which is left as it is. `spawned` holds the daemon it starts, for
+  /// the app to stop on quit as well.
   pub fn new(repo: PathBuf, spawned: Spawned, cx: &mut Context<Self>) -> Self {
     let (events, received) = async_channel::unbounded();
     let watched = repo.clone();
-    // `watch` blocks on the daemon's socket for as long as the app runs. On the
+    let watch = Watch {
+      stopped: Arc::default(),
+      spawned: spawned.clone(),
+    };
+    let stopped = watch.stopped.clone();
+    // `watch` blocks on the daemon's socket for as long as the view lives. On the
     // background executor it would hold a worker for good: it gets its own thread.
     std::thread::spawn(move || {
       watch::watch(&watched, Sockets::for_repo, &spawned, |event| {
-        events.send_blocking(event).is_ok()
+        !stopped.load(Ordering::Relaxed) && events.send_blocking(event).is_ok()
       });
     });
     cx.spawn(async move |this, cx| {
@@ -461,15 +498,20 @@ impl Workspace {
       }
     })
     .detach();
-    Self::with_state(repo, State::new(Listing::Loading, None), cx)
+    Self::with_state(repo, State::new(Listing::Loading, None), watch, cx)
   }
 
   /// Shows `worktrees`, listed in `repo`, without following gwm: the screenshot example.
   pub fn showing(repo: PathBuf, worktrees: Vec<Worktree>, source: Source, cx: &mut Context<Self>) -> Self {
-    Self::with_state(repo, State::new(Listing::Ready(worktrees), Some(source)), cx)
+    Self::with_state(
+      repo,
+      State::new(Listing::Ready(worktrees), Some(source)),
+      Watch::default(),
+      cx,
+    )
   }
 
-  fn with_state(repo: PathBuf, state: State, cx: &mut Context<Self>) -> Self {
+  fn with_state(repo: PathBuf, state: State, watch: Watch, cx: &mut Context<Self>) -> Self {
     let located = repo.clone();
     cx.spawn(async move |this, cx| {
       let (found, opened_in) = cx
@@ -511,6 +553,7 @@ impl Workspace {
       form_open: false,
       sidebar_scroll: ScrollHandle::new(),
       focus: cx.focus_handle(),
+      _watch: watch,
     }
   }
 
@@ -1387,6 +1430,14 @@ pub(crate) mod tests {
       state.links(state.selected().unwrap()),
       Some(&Err("gh: HTTP 502".to_owned()))
     );
+  }
+
+  #[test]
+  fn a_view_that_goes_tells_its_watch_to_stop() {
+    let watch = Watch::default();
+    let stopped = watch.stopped.clone();
+    drop(watch);
+    assert!(stopped.load(Ordering::Relaxed));
   }
 
   #[test]
