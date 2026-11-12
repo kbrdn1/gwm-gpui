@@ -605,9 +605,13 @@ impl Workspace {
     }
   }
 
-  /// A click on a sidebar row: the user moves on, and the form closes.
+  /// A click on a sidebar row: the user moves on, and the form closes. The
+  /// row is revealed like one the keyboard reaches: the sessions nested under
+  /// the row left behind fold, and one above the clicked row takes it up the
+  /// list by its height, out of view if the list was scrolled.
   pub(crate) fn select(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
     self.state.select(path);
+    self.reveal_selection();
     if self.form_open {
       self.close_form(window, cx);
     }
