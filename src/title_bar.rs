@@ -90,7 +90,7 @@ pub(crate) fn title_bar(
 
 /// Where the window moves from, as a native title bar would: a drag moves it,
 /// a double click zooms it.
-fn drag_area() -> gpui::Div {
+pub(crate) fn drag_area() -> gpui::Div {
   div()
     .h_full()
     .on_mouse_down(MouseButton::Left, |event: &MouseDownEvent, window: &mut Window, _| {
