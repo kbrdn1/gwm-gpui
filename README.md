@@ -19,7 +19,7 @@ cargo run -- /path/to/a/repo   # defaults to the current directory
 
 The first build compiles GPUI and takes several minutes. Without an argument, outside a repo, the window opens on a landing view, the repos opened before and "Open folder…", with the folder picker over it. Cancel the picker and the view stays, to pick from. File > Open… (⌘O) opens a folder in a new window.
 
-A picked folder that is in no git repo is not opened: a sheet gives git's reason, and its "Choose another folder…" reopens the picker. A path given as an argument is taken as it is, and the window says what git and gwm make of it: it is how a bare repo, which has no work tree for git, is listed.
+A picked folder that is in no git repo is not opened: a sheet gives git's reason, and its "Choose another folder…" reopens the picker. A bare repo is refused too, having no work tree for git: pick one of its worktrees instead. A path given as an argument is taken as it is, and the window says what git and gwm make of it, so a bare repo can also be listed by passing it.
 
 ## Install
 
