@@ -18,6 +18,9 @@ pub struct Agents {
   pub sessions: Vec<Session>,
 }
 
+/// A session, as far as the app shows it. gwm also gives its `id`, which
+/// nothing here reads: it is not asked for, so that a change to it does not
+/// make the sessions unreadable.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Session {
   /// The agent, as gwm names it (`claude`, `codex`, `opencode`, `vibe`). Kept
@@ -27,15 +30,14 @@ pub struct Session {
   /// The last activity gwm saw in the session's artefacts, in seconds since
   /// the epoch.
   pub last_activity: u64,
-  /// The agent's own id for the session: what `gwm agents attach` takes.
-  pub id: String,
   /// Its title or first prompt. Left out when its artefacts carry none.
   pub name: Option<String>,
 }
 
 /// gwm's word on a session when it listed it: `active` when the last activity
-/// in its artefacts was under 300 s old. It is gwm's to give: nothing here
-/// derives it from `last_activity`.
+/// in its artefacts was under 300 s old and the session has not ended (a
+/// dead process, a recorded end), `idle` otherwise. It is gwm's to give:
+/// nothing here derives it from `last_activity`.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(from = "String")]
 pub enum Freshness {
@@ -141,12 +143,11 @@ mod tests {
   /// worktrees: it is pinned to three of them (`gwm agents attach`).
   const REAL_NOTIFICATION: &str = r#"{"jsonrpc":"2.0","method":"worktrees.changed","params":{"schema_version":1,"worktrees":[{"age_seconds":null,"agents":{"sessions":[{"freshness":"idle","id":"00000000-0000-4000-8000-000000000004","kind":"claude","last_activity":1794491329,"name":"Open a repo from the picker"},{"freshness":"idle","id":"00000000-0000-4000-8000-000000000002","kind":"claude","last_activity":1794444366,"name":"Refuse a folder in no repo"},{"freshness":"idle","id":"00000000-0000-4000-8000-000000000001","kind":"claude","last_activity":1794444304,"name":"Agents in the sidebar"},{"freshness":"idle","id":"00000000-0000-4000-8000-000000000003","kind":"claude","last_activity":1794347316,"name":"The window follows its repo"}],"top":{"freshness":"idle","id":"00000000-0000-4000-8000-000000000004","kind":"claude","last_activity":1794491329,"name":"Open a repo from the picker"}},"branch":"dev","head":"02ffce8f4c62de86cec81f1475618ef83fd32b77","id":"gwm-gpui","is_locked":false,"is_main":true,"is_prunable":false,"issue":null,"name":"gwm-gpui","path":"/repos/gwm-gpui/","pr":null,"status":{"ahead":0,"behind":0,"has_upstream":true,"is_dirty":false,"unknown":false}},{"age_seconds":47161,"agents":{"sessions":[{"freshness":"idle","id":"00000000-0000-4000-8000-000000000004","kind":"claude","last_activity":1794491329,"name":"Open a repo from the picker"}],"top":{"freshness":"idle","id":"00000000-0000-4000-8000-000000000004","kind":"claude","last_activity":1794491329,"name":"Open a repo from the picker"}},"branch":"feat/#17-window-follows-repo","head":"5bf78e54304e0463afd0e72a84570ebd7c23df32","id":"feat-17-window-follows-repo","is_locked":false,"is_main":false,"is_prunable":false,"issue":17,"name":"feat-17-window-follows-repo","path":"/repos/gwm-gpui-worktrees/feat-17-window-follows-repo","pr":null,"status":{"ahead":0,"behind":0,"has_upstream":true,"is_dirty":false,"unknown":false}},{"age_seconds":87,"agents":{"sessions":[{"freshness":"idle","id":"00000000-0000-4000-8000-000000000004","kind":"claude","last_activity":1794491329,"name":"Open a repo from the picker"}],"top":{"freshness":"idle","id":"00000000-0000-4000-8000-000000000004","kind":"claude","last_activity":1794491329,"name":"Open a repo from the picker"}},"branch":"feat/#21-agents-in-sidebar","head":"02ffce8f4c62de86cec81f1475618ef83fd32b77","id":"feat-21-agents-in-sidebar","is_locked":false,"is_main":false,"is_prunable":false,"issue":21,"name":"feat-21-agents-in-sidebar","path":"/repos/gwm-gpui-worktrees/feat-21-agents-in-sidebar","pr":null,"status":{"ahead":0,"behind":0,"has_upstream":false,"is_dirty":false,"unknown":false}},{"age_seconds":43837,"agents":{"sessions":[{"freshness":"idle","id":"00000000-0000-4000-8000-000000000004","kind":"claude","last_activity":1794491329,"name":"Open a repo from the picker"}],"top":{"freshness":"idle","id":"00000000-0000-4000-8000-000000000004","kind":"claude","last_activity":1794491329,"name":"Open a repo from the picker"}},"branch":"fix/#19-refuse-non-repo-folder","head":"c48316909aca7d70285789c48266e2f70972c814","id":"fix-19-refuse-non-repo-folder","is_locked":false,"is_main":false,"is_prunable":false,"issue":19,"name":"fix-19-refuse-non-repo-folder","path":"/repos/gwm-gpui-worktrees/fix-19-refuse-non-repo-folder","pr":null,"status":{"ahead":0,"behind":0,"has_upstream":true,"is_dirty":false,"unknown":false}}]}}"#;
 
-  fn session(number: u8, freshness: Freshness, last_activity: u64, name: &str) -> Session {
+  fn session(freshness: Freshness, last_activity: u64, name: &str) -> Session {
     Session {
       kind: "claude".to_owned(),
       freshness,
       last_activity,
-      id: format!("00000000-0000-4000-8000-00000000000{number}"),
       name: Some(name.to_owned()),
     }
   }
@@ -154,16 +155,16 @@ mod tests {
   #[test]
   fn reads_the_sessions_of_a_real_gwm_list() {
     let worktrees = parse(REAL.as_bytes()).unwrap();
-    let top = session(1, Freshness::Active, 1_794_491_219, "Agents in the sidebar");
+    let top = session(Freshness::Active, 1_794_491_219, "Agents in the sidebar");
     assert_eq!(
       worktrees[0].agents,
       Some(Ok(Agents {
         top: top.clone(),
         sessions: vec![
           top,
-          session(2, Freshness::Idle, 1_794_444_366, "Refuse a folder in no repo"),
-          session(3, Freshness::Idle, 1_794_444_304, "The window follows its repo"),
-          session(4, Freshness::Idle, 1_794_347_316, "Open a repo from the picker"),
+          session(Freshness::Idle, 1_794_444_366, "Refuse a folder in no repo"),
+          session(Freshness::Idle, 1_794_444_304, "The window follows its repo"),
+          session(Freshness::Idle, 1_794_347_316, "Open a repo from the picker"),
         ],
       }))
     );
@@ -181,6 +182,19 @@ mod tests {
     let agents = parse(json.as_bytes()).unwrap().remove(0).agents.unwrap().unwrap();
     assert_eq!(agents.top.name, None);
     assert_eq!(agents.sessions[0].name.as_deref(), Some("Agents in the sidebar"));
+  }
+
+  /// Only what the app shows is asked of a session. The experimental tier
+  /// may rename or drop the rest, as it may its `id`, and the sessions are
+  /// still read.
+  #[test]
+  fn a_field_the_app_does_not_show_may_go_without_losing_the_sessions() {
+    let json = REAL.replace(r#""id": "00000000"#, r#""session": "00000000"#);
+    let agents = &parse(json.as_bytes()).unwrap()[0].agents;
+    assert!(
+      matches!(agents, Some(Ok(agents)) if agents.sessions.len() == 4),
+      "{agents:?}"
+    );
   }
 
   /// The experimental tier may change under this build: what it cannot read
@@ -223,12 +237,7 @@ mod tests {
     assert_eq!(sessions(0).len(), 4);
     assert_eq!(
       sessions(1),
-      [session(
-        4,
-        Freshness::Idle,
-        1_794_491_329,
-        "Open a repo from the picker"
-      )]
+      [session(Freshness::Idle, 1_794_491_329, "Open a repo from the picker")]
     );
   }
 
