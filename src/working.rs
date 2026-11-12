@@ -13,7 +13,7 @@
 //! each, as each of their rows says `active`: the list does not say which
 //! one it works in.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use gpui::{Context, FontWeight, div, prelude::*, px};
 use gwm_client::{Freshness, Worktree};
@@ -81,8 +81,7 @@ pub(crate) fn working(worktrees: &[Worktree], live: bool) -> Option<Working> {
   (!working.cards.is_empty()).then_some(working)
 }
 
-/// `selected`: the selected worktree's path, whose cards stand selected.
-pub(crate) fn panel(working: Working, selected: Option<&Path>, cx: &mut Context<Workspace>) -> impl IntoElement {
+pub(crate) fn panel(working: Working, cx: &mut Context<Workspace>) -> impl IntoElement {
   let active = theme::color(theme::ACTIVE);
   let count = working.cards.len();
   // ponytail: past four cards the list scrolls, half of the fifth showing.
@@ -98,8 +97,7 @@ pub(crate) fn panel(working: Working, selected: Option<&Path>, cx: &mut Context<
     .px(px(4.))
     .pb(px(4.));
   for (index, session) in working.cards.into_iter().enumerate() {
-    let is_selected = selected == Some(session.path.as_path());
-    cards = cards.child(card(index, session, is_selected, cx));
+    cards = cards.child(card(index, session, cx));
   }
   div().flex_none().px(px(8.)).pb(px(8.)).child(
     div()
@@ -154,7 +152,7 @@ pub(crate) fn panel(working: Working, selected: Option<&Path>, cx: &mut Context<
 
 /// A card: the session's name, then its worktree and, at the right, its
 /// agent as a worktree's row names it. A click selects the worktree.
-fn card(index: usize, session: Card, selected: bool, cx: &mut Context<Workspace>) -> impl IntoElement {
+fn card(index: usize, session: Card, cx: &mut Context<Workspace>) -> impl IntoElement {
   let path = session.path;
   div()
     .id(("working-card", index))
@@ -164,13 +162,7 @@ fn card(index: usize, session: Card, selected: bool, cx: &mut Context<Workspace>
     .px(px(8.))
     .py(px(6.))
     .cursor_pointer()
-    .map(|card| {
-      if selected {
-        card.bg(theme::selected())
-      } else {
-        card.hover(|card| card.bg(theme::working_hover()))
-      }
-    })
+    .hover(|card| card.bg(theme::working_hover()))
     .on_click(cx.listener(move |workspace, _, window, cx| workspace.select(path.clone(), window, cx)))
     .child(
       one_line(session.title)

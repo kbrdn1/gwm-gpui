@@ -186,10 +186,7 @@ pub(crate) fn sidebar(
     )
     .child(list)
     // Under the list, as in Monocode: nothing when no session is active.
-    .children(
-      working::working(worktrees, live)
-        .map(|working| working::panel(working, selected.map(|selected| selected.path.as_path()), cx)),
-    )
+    .children(working::working(worktrees, live).map(|working| working::panel(working, cx)))
 }
 
 /// Monocode's "New" navigation row (`sidebar_navigation`): its glyph, the
