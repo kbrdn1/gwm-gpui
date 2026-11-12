@@ -7,6 +7,7 @@ pub mod assets;
 mod create_form;
 mod detail;
 pub mod login_shell;
+pub mod open;
 mod open_menu;
 mod project_picker;
 pub mod recent;
