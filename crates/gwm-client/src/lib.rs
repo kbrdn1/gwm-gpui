@@ -65,6 +65,18 @@ impl Repo {
       common_dir: next()?,
     })
   }
+
+  /// Whether `path` is in a bare repo: [`Repo::locate`] fails there, git
+  /// having no work tree to name, while gwm lists it. False when git cannot
+  /// tell.
+  pub fn is_bare(path: &Path) -> bool {
+    Command::new("git")
+      .args(["rev-parse", "--is-bare-repository"])
+      .current_dir(path)
+      .stdin(Stdio::null())
+      .output()
+      .is_ok_and(|output| output.status.success() && output.stdout.trim_ascii() == b"true")
+  }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -218,6 +230,34 @@ mod tests {
   use std::{sync::mpsc, thread, time::Duration};
 
   use super::*;
+
+  fn git_init(args: &[&str]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let status = Command::new("git")
+      .args(["init", "-q"])
+      .args(args)
+      .current_dir(dir.path())
+      .stdin(Stdio::null())
+      .status()
+      .unwrap();
+    assert!(status.success());
+    dir
+  }
+
+  /// Against a real git: `locate` places the work tree alone, and `is_bare`
+  /// names the bare repo alone.
+  #[test]
+  fn a_bare_repo_is_told_from_a_work_tree_and_from_no_repo() {
+    let bare = git_init(&["--bare"]);
+    assert!(Repo::locate(bare.path()).is_err());
+    assert!(Repo::is_bare(bare.path()));
+    let work_tree = git_init(&[]);
+    assert!(Repo::locate(work_tree.path()).is_ok());
+    assert!(!Repo::is_bare(work_tree.path()));
+    let plain = tempfile::tempdir().unwrap();
+    assert!(Repo::locate(plain.path()).is_err());
+    assert!(!Repo::is_bare(plain.path()));
+  }
 
   #[test]
   fn a_second_removal_waits_for_the_one_under_way() {
