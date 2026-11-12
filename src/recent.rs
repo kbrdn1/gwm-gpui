@@ -133,6 +133,13 @@ pub fn load(file: &Path) -> Vec<Entry> {
   std::fs::read(file).map(|bytes| parse(&bytes)).unwrap_or_default()
 }
 
+/// The entries of `file` whose folder exists, as the menu and the landing
+/// view show them (see [`shown`]): read at launch, when no repo opens to
+/// record itself. Blocks on the disk: off the UI thread.
+pub fn listed(file: &Path) -> Vec<Entry> {
+  load(file).into_iter().filter_map(shown).collect()
+}
+
 /// Records `entry` in `file` and returns the entries whose folder exists. A
 /// missing one is hidden, not dropped: an unmounted volume comes back.
 /// Blocks on the disk: off the UI thread.
@@ -274,6 +281,32 @@ pub(crate) mod tests {
     assert_eq!(load(&file).len(), 2);
     std::fs::write(&file, [0xff, 0x00, 0x13]).unwrap();
     assert!(load(&file).is_empty());
+  }
+
+  #[test]
+  fn the_list_read_at_launch_is_the_files_most_recent_first_without_the_folders_gone() {
+    let home = tempfile::tempdir().unwrap();
+    let file = file_in(home.path());
+    assert!(listed(&file).is_empty(), "no file yet");
+    let folder = |name: &str| {
+      let folder = home.path().join(name);
+      std::fs::create_dir(&folder).unwrap();
+      folder.to_str().unwrap().to_owned()
+    };
+    let (last, older) = (folder("last"), folder("older"));
+    let recorded = [
+      entry("/last/.git", &last),
+      entry("/gone/.git", "/gone"),
+      entry("/older/.git", &older),
+    ];
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, serialize(&recorded)).unwrap();
+    assert_eq!(
+      listed(&file),
+      [entry("/last/.git", &last), entry("/older/.git", &older)]
+    );
+    // Read, not rewritten: the folder that is gone keeps its line.
+    assert_eq!(load(&file), recorded);
   }
 
   #[test]
