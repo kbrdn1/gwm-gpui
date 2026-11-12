@@ -178,5 +178,11 @@ mod tests {
     assert!(does("backspace", &filter, &text_input::Backspace));
     assert!(does("escape", &filter, &workspace::Dismiss));
     assert!(does(NEW_WORKTREE_KEY, &filter, &workspace::NewWorktree));
+    // Without its own context, which it has not while the form is shown, the
+    // filter's field is a field: its caret, and Escape still closes it.
+    let plain = ["Workspace", "TextInput"];
+    assert!(does("down", &plain, &text_input::End));
+    assert!(does("up", &plain, &text_input::Home));
+    assert!(does("escape", &plain, &workspace::Dismiss));
   }
 }

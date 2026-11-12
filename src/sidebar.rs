@@ -177,7 +177,7 @@ pub(crate) fn sidebar(
         .px(px(8.))
         .pt(px(4.))
         .pb(px(12.))
-        .children(filter.map(filter::field))
+        .children(filter.map(|input| filter::field(input, form_open)))
         // No list yet, no "New": nothing would tell the new worktree apart,
         // and the title bar has no `+` either.
         .when(state.can_create(), |navigation| {

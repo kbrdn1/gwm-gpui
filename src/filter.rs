@@ -71,10 +71,20 @@ pub(crate) fn button(open: bool, cx: &mut Context<Workspace>) -> impl IntoElemen
     .child(icon(assets::SEARCH, 14., theme::ink(0.5)))
 }
 
-/// The field, over the "New" row. Its key context is what gives `up` and
-/// `down` to the list under it, in place of the caret.
-pub(crate) fn field(input: &Entity<TextInput>) -> impl IntoElement {
-  div().key_context("Filter").mb(px(4.)).child(input.clone())
+/// The field, over the "New" row.
+pub(crate) fn field(input: &Entity<TextInput>, form_open: bool) -> impl IntoElement {
+  div()
+    .when_some(context(form_open), |field, context| field.key_context(context))
+    .mb(px(4.))
+    .child(input.clone())
+}
+
+/// The field's key context, which gives `up` and `down` to the list under
+/// it, in place of the caret. Not while the form is shown: the selection is
+/// behind it and does not move (`Workspace::step`), so the two keys would do
+/// nothing. They are the field's own then.
+pub(crate) fn context(form_open: bool) -> Option<&'static str> {
+  (!form_open).then_some("Filter")
 }
 
 #[cfg(test)]
@@ -163,6 +173,14 @@ mod tests {
     assert!(keeps("Claude", &worktree));
     assert!(keeps("PR 706", &worktree));
     assert_eq!(Query::new(" Fix "), Query::new("fix"));
+  }
+
+  /// While the form is shown, the selection is behind it and does not move:
+  /// the field keeps `up` and `down` for its caret, as a form's field does.
+  #[test]
+  fn the_field_takes_the_lists_keys_only_while_the_list_can_be_walked() {
+    assert_eq!(context(false), Some("Filter"));
+    assert_eq!(context(true), None);
   }
 
   #[test]
