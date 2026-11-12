@@ -22,6 +22,9 @@ assets/icons/LICENSE-MONOCODE):
   metrics and its "New" navigation row: the glyph, the word, the shortcut
   in its trailing column (theme.rs section_label, shell.rs,
   shell/sidebar_list.rs sidebar_navigation);
+- src/filter.rs takes its header's search button: the 24 px chrome button
+  at the right of the project picker, lit while the search is open
+  (shell.rs sidebar-search, theme.rs chrome_button);
 - src/sessions.rs takes its rails: a row's sessions hung on a line under
   it, the step and the nested row's metrics, and the state that stands in
   the time's place while the agent works (shell/rails.rs, activity.rs

@@ -62,6 +62,9 @@ pub const MENU_ROW_RADIUS: Pixels = px(8.);
 /// chrome's buttons (Tailwind's `rounded-md`).
 pub const NAV_ROW_HEIGHT: Pixels = px(32.);
 pub const CONTROL_RADIUS: Pixels = px(6.);
+/// Monocode's 24 px chrome button (`chrome_button` in its `theme.rs`): the
+/// header's magnifier.
+pub const CHROME_BUTTON: Pixels = px(24.);
 /// The column a navigation row keeps for its shortcut, centred on the axis
 /// of the header's buttons above it (`TRAILING_SLOT`).
 pub const NAV_TRAILING_SLOT: Pixels = px(14.);

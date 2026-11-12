@@ -13,8 +13,8 @@ use std::{
 };
 
 use gpui::{
-  App, Context, FocusHandle, Focusable, MouseButton, PathBuilder, Pixels, PromptLevel, ScrollHandle, SharedString,
-  Window, actions, canvas, div, point, prelude::*, px,
+  App, Context, Entity, FocusHandle, Focusable, MouseButton, PathBuilder, Pixels, PromptLevel, ScrollHandle,
+  SharedString, Window, actions, canvas, div, point, prelude::*, px,
 };
 use gwm_client::{
   Create, Links, Worktree,
@@ -25,10 +25,17 @@ use crate::{
   age,
   apps::{self, Installed},
   create_form::{self, Form, Mode},
-  detail, sidebar, status_bar, theme, title_bar,
+  detail,
+  filter::Query,
+  sidebar, status_bar,
+  text_input::TextInput,
+  theme, title_bar,
 };
 
-actions!(workspace, [SelectNext, SelectPrevious, CloseForm, NewWorktree]);
+actions!(
+  workspace,
+  [SelectNext, SelectPrevious, Dismiss, NewWorktree, FilterWorktrees]
+);
 
 /// What is under way on a worktree, or came of the last action on it, shown
 /// in its card.
@@ -51,10 +58,14 @@ pub(crate) struct State {
   pub listing: Listing,
   /// Where the list comes from: shown, so a stale list never passes for live.
   pub source: Option<Source>,
-  /// The selected worktree's path, which a new snapshot keeps. Not git's id:
-  /// gwm gives the main worktree its directory's name as id, which a linked
-  /// worktree can share.
+  /// The worktree picked last, by its path, which a new snapshot keeps. Not
+  /// git's id: gwm gives the main worktree its directory's name as id, which
+  /// a linked worktree can share. What stands selected is [`State::selected`]:
+  /// this one, unless it is gone or the filter hides it.
   pub selected: Option<PathBuf>,
+  /// What the filter's field holds: the sidebar shows the worktrees it keeps,
+  /// and the selection is one of them.
+  pub query: Query,
   /// When the shown snapshot arrived: its ages count from there.
   pub received_at: i64,
   /// The worktree whose removal is under way: one at a time, since gwm
@@ -115,6 +126,7 @@ impl State {
       listing,
       source,
       selected: None,
+      query: Query::default(),
       received_at: age::now(),
       removing: None,
       failed: None,
@@ -171,19 +183,33 @@ impl State {
     }
   }
 
-  /// The selected worktree, else the sidebar's first: a selection whose
-  /// worktree is gone falls back to it.
+  /// The selected worktree: the one picked last, else the first the sidebar
+  /// shows. A pick whose worktree is gone, or that the filter hides, falls
+  /// back to it, and is kept: it stands selected again once the filter shows
+  /// it. `None` when the sidebar shows no worktree.
   pub fn selected(&self) -> Option<&Worktree> {
     let worktrees = self.worktrees();
-    let order = order(worktrees);
+    let order = order(worktrees, &self.query);
     let position = self.position(&order).unwrap_or(0);
     order.get(position).map(|&index| &worktrees[index])
   }
 
-  /// Moves the selection `delta` rows down the sidebar, stopping at either end.
+  /// Whether the filter hides the worktree picked last: a pick made from
+  /// outside the list, as a worktree just created is, would not show.
+  pub fn hides_selection(&self) -> bool {
+    self.selected.as_deref().is_some_and(|picked| {
+      self
+        .worktrees()
+        .iter()
+        .any(|worktree| worktree.path == picked && !self.query.matches(worktree))
+    })
+  }
+
+  /// Moves the selection `delta` rows down the sidebar, among the rows it
+  /// shows, stopping at either end.
   fn step(&mut self, delta: isize) {
     let worktrees = self.worktrees();
-    let order = order(worktrees);
+    let order = order(worktrees, &self.query);
     let Some(last) = order.len().checked_sub(1) else {
       return;
     };
@@ -385,12 +411,34 @@ pub(crate) fn place(worktree: &Worktree) -> Place {
   }
 }
 
-/// The sidebar's order, as indexes into `worktrees`: by [`Place`], the dated
-/// branches youngest first, and gwm's own order otherwise.
-pub(crate) fn order(worktrees: &[Worktree]) -> Vec<usize> {
-  let mut order: Vec<usize> = (0..worktrees.len()).collect();
+/// The sidebar's order, as indexes into `worktrees`: those `query` keeps, by
+/// [`Place`], the dated branches youngest first, and gwm's own order otherwise.
+pub(crate) fn order(worktrees: &[Worktree], query: &Query) -> Vec<usize> {
+  let mut order: Vec<usize> = (0..worktrees.len())
+    .filter(|&index| query.matches(&worktrees[index]))
+    .collect();
   order.sort_by_key(|&index| place(&worktrees[index]));
   order
+}
+
+/// What Escape closes.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Dismissed {
+  Filter,
+  Form,
+}
+
+/// What Escape closes, of what is open: what has the focus first. The
+/// filter's field when the keys go to it, else the form, else a filter left
+/// open while the focus went back to the list.
+pub(crate) fn dismissed(filter_open: bool, filter_focused: bool, form_open: bool) -> Option<Dismissed> {
+  if filter_open && (filter_focused || !form_open) {
+    Some(Dismissed::Filter)
+  } else if form_open {
+    Some(Dismissed::Form)
+  } else {
+    None
+  }
 }
 
 /// The native alert before a removal: its level, message and detail. It says
@@ -441,6 +489,10 @@ pub struct Workspace {
   /// The "New worktree" form, in place of the card while open.
   form: Form,
   form_open: bool,
+  /// The filter's field, under the sidebar's header while open. Its text is
+  /// copied to `state.query` as it changes.
+  filter: Entity<TextInput>,
+  filter_open: bool,
   sidebar_scroll: ScrollHandle,
   focus: FocusHandle,
   /// Ends the watch, and the daemon it started, when the view goes.
@@ -494,7 +546,7 @@ impl Workspace {
           workspace.state.apply(event);
           // A created worktree, once listed, takes the selection.
           if workspace.state.selected != before {
-            workspace.reveal_selection();
+            workspace.show_selection(cx);
           }
           cx.notify();
         });
@@ -549,6 +601,19 @@ impl Workspace {
       }
     })
     .detach();
+    // The filter's text is the field's: the state follows it, and the list
+    // with it. The field also notifies when its caret moves: only a new
+    // text counts.
+    let filter = cx.new(|cx| TextInput::new("Filter worktrees", cx));
+    cx.observe(&filter, |workspace, filter, cx| {
+      let query = Query::new(filter.read(cx).text());
+      if query != workspace.state.query {
+        workspace.state.query = query;
+        workspace.reveal_selection();
+        cx.notify();
+      }
+    })
+    .detach();
     Self {
       state,
       sidebar_open: true,
@@ -557,6 +622,8 @@ impl Workspace {
       menu_open: false,
       form: Form::new(cx),
       form_open: false,
+      filter,
+      filter_open: false,
       sidebar_scroll: ScrollHandle::new(),
       focus: cx.focus_handle(),
       _watch: watch,
@@ -600,8 +667,72 @@ impl Workspace {
   fn reveal_selection(&self) {
     let ages = self.ages();
     let selected = self.state.selected().map(|worktree| worktree.path.as_path());
-    if let Some(child) = sidebar::child_of(self.state.worktrees(), selected, |age| ages.bucket(age)) {
+    let child = sidebar::child_of(self.state.worktrees(), &self.state.query, selected, |age| {
+      ages.bucket(age)
+    });
+    if let Some(child) = child {
       self.sidebar_scroll.scroll_to_item(child);
+    }
+  }
+
+  /// Reveals a selection made from outside the list: a worktree just
+  /// created. What was just selected must show, so a filter that hides it is
+  /// cleared, its field left open.
+  fn show_selection(&mut self, cx: &mut Context<Self>) {
+    if self.state.hides_selection() {
+      self.clear_filter(cx);
+    }
+    self.reveal_selection();
+  }
+
+  /// The header's magnifier: opens the filter's field, or clears and closes it.
+  pub(crate) fn toggle_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.filter_open {
+      self.close_filter(window, cx);
+    } else {
+      self.open_filter(window, cx);
+    }
+  }
+
+  /// Shows the filter's field, the sidebar with it, and gives it the focus,
+  /// or gives it back to one already open. Not without a list: there is
+  /// nothing to narrow.
+  fn open_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.state.worktrees().is_empty() {
+      return;
+    }
+    self.filter_open = true;
+    self.sidebar_open = true;
+    window.focus(&self.filter.focus_handle(cx), cx);
+    cx.notify();
+  }
+
+  /// Empties the filter: every worktree shows again, and the worktree picked
+  /// last is the selected one again.
+  fn clear_filter(&mut self, cx: &mut Context<Self>) {
+    self.filter.update(cx, |filter, cx| filter.clear(cx));
+    self.state.query = Query::default();
+    self.reveal_selection();
+    cx.notify();
+  }
+
+  /// Clears the filter and hides its field. The keys go back to the list if
+  /// they went to the field.
+  fn close_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.filter.focus_handle(cx).is_focused(window) {
+      window.focus(&self.focus, cx);
+    }
+    self.filter_open = false;
+    self.clear_filter(cx);
+  }
+
+  /// Escape: closes the filter or the form (see [`dismissed`]).
+  fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let filter_focused = self.filter.focus_handle(cx).is_focused(window);
+    match dismissed(self.filter_open, filter_focused, self.form_open) {
+      Some(Dismissed::Filter) => self.close_filter(window, cx),
+      Some(Dismissed::Form) => self.close_form(window, cx),
+      None => {}
     }
   }
 
@@ -618,8 +749,14 @@ impl Workspace {
     cx.notify();
   }
 
-  pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+  /// Closing the sidebar closes the filter with it: its field is in the
+  /// sidebar, and a list narrowed out of sight would still decide what `up`
+  /// and `down` reach.
+  pub(crate) fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.sidebar_open = !self.sidebar_open;
+    if !self.sidebar_open && self.filter_open {
+      self.close_filter(window, cx);
+    }
     cx.notify();
   }
 
@@ -811,7 +948,7 @@ impl Workspace {
           workspace.focus_field(0, window, cx);
         }
         if workspace.state.selected != before {
-          workspace.reveal_selection();
+          workspace.show_selection(cx);
         }
         cx.notify();
       });
@@ -863,7 +1000,8 @@ impl Render for Workspace {
           };
           detail::detail(worktree, ages, actions, cx).into_any_element()
         }
-        None => message("No worktrees", theme::ink(0.5)).into_any_element(),
+        None if self.state.query.is_empty() => message("No worktrees", theme::ink(0.5)).into_any_element(),
+        None => message("No worktrees match the filter", theme::ink(0.5)).into_any_element(),
       },
     };
     let count = matches!(self.state.listing, Listing::Ready(_)).then(|| self.state.worktrees().len());
@@ -873,12 +1011,9 @@ impl Render for Workspace {
       .key_context("Workspace")
       .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.step(1, cx)))
       .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.step(-1, cx)))
-      .on_action(cx.listener(|this, _: &CloseForm, window, cx| {
-        if this.form_open {
-          this.close_form(window, cx);
-        }
-      }))
+      .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss(window, cx)))
       .on_action(cx.listener(|this, _: &NewWorktree, window, cx| this.open_form(window, cx)))
+      .on_action(cx.listener(|this, _: &FilterWorktrees, window, cx| this.open_filter(window, cx)))
       .size_full()
       .relative()
       .flex()
@@ -906,6 +1041,7 @@ impl Render for Workspace {
               selected,
               ages,
               &self.sidebar_scroll,
+              self.filter_open.then_some(&self.filter),
               self.form_open,
               cx,
             ))
@@ -1060,7 +1196,7 @@ pub(crate) mod tests {
   fn main_comes_first_then_the_youngest_branches_then_the_undated() {
     let worktrees = demo();
     assert_eq!(
-      ids(&worktrees, &order(&worktrees)),
+      ids(&worktrees, &order(&worktrees, &Query::default())),
       ["acme-api", "docs-71", "fix-57", "feat-42", "dev"]
     );
   }
@@ -1068,6 +1204,122 @@ pub(crate) mod tests {
   #[test]
   fn nothing_selected_means_the_first_row() {
     assert_eq!(state(None).selected().unwrap().id, "acme-api");
+  }
+
+  /// `demo()` under a filter. "f" keeps fix-57 and feat-42, in the sidebar's
+  /// order; "docs" keeps docs-71 alone.
+  fn filtered(text: &str) -> State {
+    let mut state = state(None);
+    state.query = Query::new(text);
+    state
+  }
+
+  /// The selection is one of the rows shown. A pick the filter hides gives
+  /// way to the first row shown, and is kept: it comes back with the filter
+  /// cleared.
+  #[test]
+  fn under_a_filter_the_selection_is_one_of_the_rows_shown() {
+    let mut state = state(None);
+    state.select(PathBuf::from("/fix-57"));
+    state.query = Query::new("docs");
+    assert_eq!(state.selected().unwrap().id, "docs-71");
+    assert_eq!(state.selected, Some(PathBuf::from("/fix-57")));
+    // Typing on: the first row shown follows the text, the pick does not move.
+    state.query = Query::new("f");
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+    state.query = Query::new("feat");
+    assert_eq!(state.selected().unwrap().id, "feat-42");
+    state.query = Query::default();
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+    // Nothing picked: the first row shown, then the sidebar's first again.
+    let mut state = filtered("docs");
+    assert_eq!(state.selected().unwrap().id, "docs-71");
+    assert_eq!(state.selected, None);
+    state.query = Query::default();
+    assert_eq!(state.selected().unwrap().id, "acme-api");
+  }
+
+  /// Up and down walk the rows shown, from the first one when the pick is
+  /// hidden, and stop at the ends of what is shown.
+  #[test]
+  fn under_a_filter_the_keyboard_walks_the_rows_shown() {
+    let mut state = filtered("f");
+    // The pick is hidden: fix-57, the first row shown, stands selected.
+    state.select(PathBuf::from("/docs-71"));
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+    state.step(1);
+    assert_eq!(state.selected().unwrap().id, "feat-42");
+    state.step(1);
+    assert_eq!(state.selected().unwrap().id, "feat-42");
+    state.step(-1);
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+    state.step(-1);
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+    // A row reached under the filter is a pick: it stays once the filter goes.
+    state.step(1);
+    state.query = Query::default();
+    assert_eq!(state.selected().unwrap().id, "feat-42");
+  }
+
+  #[test]
+  fn a_filter_that_keeps_nothing_selects_nothing_and_keeps_the_pick() {
+    let mut state = filtered("nothing-of-the-kind");
+    state.select(PathBuf::from("/fix-57"));
+    assert!(state.selected().is_none());
+    for delta in [1, -1] {
+      state.step(delta);
+      assert!(state.selected().is_none());
+    }
+    assert_eq!(state.begin_links(), None);
+    assert_eq!(state.selected, Some(PathBuf::from("/fix-57")));
+    state.query = Query::default();
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+  }
+
+  /// A pick made from outside the list may be one the filter hides: the view
+  /// then clears the filter. A row of the list never is.
+  #[test]
+  fn a_pick_the_filter_hides_is_told_from_one_it_shows() {
+    let mut state = filtered("f");
+    assert!(!state.hides_selection());
+    state.select(PathBuf::from("/fix-57"));
+    assert!(!state.hides_selection());
+    state.select(PathBuf::from("/docs-71"));
+    assert!(state.hides_selection());
+    state.query = Query::default();
+    assert!(!state.hides_selection());
+    // A pick whose worktree is gone is not hidden: there is nothing to show.
+    state.query = Query::new("f");
+    state.select(PathBuf::from("/gone"));
+    assert!(!state.hides_selection());
+  }
+
+  /// A worktree created while the filter is on takes the selection, and the
+  /// filter may hide it.
+  #[test]
+  fn a_created_worktree_the_filter_hides_is_a_hidden_pick() {
+    let mut state = filtered("docs");
+    assert!(state.begin_create(Create::name("spike").unwrap()));
+    state.end_create(Ok(()));
+    let mut listed = demo();
+    listed.push(worktree("spike", false, Some(0)));
+    state.apply(Event::Snapshot(listed));
+    assert_eq!(state.selected, Some(PathBuf::from("/spike")));
+    assert_eq!(state.selected().unwrap().id, "docs-71");
+    assert!(state.hides_selection());
+  }
+
+  /// Escape closes what has the focus first: the filter's field, else the
+  /// form, else a filter left open.
+  #[test]
+  fn escape_closes_what_has_the_focus_first() {
+    // (filter open, filter focused, form open)
+    assert_eq!(dismissed(true, true, false), Some(Dismissed::Filter));
+    assert_eq!(dismissed(true, true, true), Some(Dismissed::Filter));
+    assert_eq!(dismissed(true, false, true), Some(Dismissed::Form));
+    assert_eq!(dismissed(true, false, false), Some(Dismissed::Filter));
+    assert_eq!(dismissed(false, false, true), Some(Dismissed::Form));
+    assert_eq!(dismissed(false, false, false), None);
   }
 
   #[test]

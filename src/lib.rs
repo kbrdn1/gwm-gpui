@@ -6,6 +6,7 @@ mod apps;
 pub mod assets;
 mod create_form;
 mod detail;
+mod filter;
 mod landing;
 pub mod login_shell;
 pub mod open;
@@ -54,6 +55,9 @@ pub fn window_options(cx: &App) -> WindowOptions {
 /// Opens the "New worktree" form. macOS's own key for File > New: ⌘T, which
 /// Monocode's "New" row shows, is a new tab there, and this window has one.
 pub const NEW_WORKTREE_KEY: &str = "cmd-n";
+/// Opens the filter's field and gives it the focus. macOS's own key for
+/// finding in a window: ⌘K, Monocode's, opens its search across everything.
+const FILTER_KEY: &str = "cmd-f";
 
 /// A binding's keys as macOS writes them in a menu ("⌘N"), for a row to show
 /// the shortcut that does the same.
@@ -73,8 +77,9 @@ fn bindings() -> Vec<KeyBinding> {
   vec![
     KeyBinding::new("down", workspace::SelectNext, Some("Workspace")),
     KeyBinding::new("up", workspace::SelectPrevious, Some("Workspace")),
-    KeyBinding::new("escape", workspace::CloseForm, Some("Workspace")),
+    KeyBinding::new("escape", workspace::Dismiss, Some("Workspace")),
     KeyBinding::new(NEW_WORKTREE_KEY, workspace::NewWorktree, Some("Workspace")),
+    KeyBinding::new(FILTER_KEY, workspace::FilterWorktrees, Some("Workspace")),
     KeyBinding::new("enter", create_form::Submit, Some("CreateForm")),
     KeyBinding::new("tab", create_form::NextField, Some("CreateForm")),
     KeyBinding::new("backspace", Backspace, Some("TextInput")),
@@ -90,6 +95,10 @@ fn bindings() -> Vec<KeyBinding> {
     KeyBinding::new("down", End, Some("TextInput")),
     KeyBinding::new("cmd-a", SelectAll, Some("TextInput")),
     KeyBinding::new("cmd-v", Paste, Some("TextInput")),
+    // The filter's field is over the list it narrows: there, up and down walk
+    // the rows shown. After the field's own, which they outrank at one depth.
+    KeyBinding::new("up", workspace::SelectPrevious, Some("Filter > TextInput")),
+    KeyBinding::new("down", workspace::SelectNext, Some("Filter > TextInput")),
   ]
 }
 
@@ -132,10 +141,41 @@ mod tests {
   fn the_list_and_a_field_keep_their_keys() {
     assert!(does("down", &["Workspace"], &workspace::SelectNext));
     assert!(does("up", &["Workspace"], &workspace::SelectPrevious));
-    assert!(does("escape", &["Workspace"], &workspace::CloseForm));
+    assert!(does("escape", &["Workspace"], &workspace::Dismiss));
     let field = ["Workspace", "CreateForm", "TextInput"];
     assert!(does("down", &field, &text_input::End));
     assert!(does("up", &field, &text_input::Home));
     assert!(does("enter", &field, &create_form::Submit));
+    assert!(does("escape", &field, &workspace::Dismiss));
+  }
+
+  #[test]
+  fn the_filter_opens_from_the_list_and_from_a_field() {
+    assert!(does(FILTER_KEY, &["Workspace"], &workspace::FilterWorktrees));
+    assert!(does(
+      FILTER_KEY,
+      &["Workspace", "CreateForm", "TextInput"],
+      &workspace::FilterWorktrees
+    ));
+    assert!(does(
+      FILTER_KEY,
+      &["Workspace", "Filter", "TextInput"],
+      &workspace::FilterWorktrees
+    ));
+  }
+
+  /// The filter's field is over the list it narrows: up and down walk the
+  /// rows shown, where a form's field moves its caret. The rest of the field
+  /// is a field's.
+  #[test]
+  fn in_the_filters_field_up_and_down_walk_the_list() {
+    let filter = ["Workspace", "Filter", "TextInput"];
+    assert!(does("down", &filter, &workspace::SelectNext));
+    assert!(does("up", &filter, &workspace::SelectPrevious));
+    assert!(does("left", &filter, &text_input::Left));
+    assert!(does("cmd-left", &filter, &text_input::Home));
+    assert!(does("backspace", &filter, &text_input::Backspace));
+    assert!(does("escape", &filter, &workspace::Dismiss));
+    assert!(does(NEW_WORKTREE_KEY, &filter, &workspace::NewWorktree));
   }
 }
