@@ -20,6 +20,11 @@ assets/icons/LICENSE-MONOCODE):
   (theme.rs title_tab_plate, tab_tile.rs);
 - src/sidebar.rs takes its section label and its detailed session row
   metrics (theme.rs section_label, shell.rs, shell/sidebar_list.rs);
+- src/sessions.rs takes its rails: a row's sessions hung on a line under
+  it, the step and the nested row's metrics, and the state that stands in
+  the time's place while the agent works (shell/rails.rs, activity.rs
+  rail_from, shell.rs session_row_with and session_suffix, theme.rs
+  rail_color);
 - src/age.rs reimplements its relative time format and day buckets
   (crates/monocode-core/src/time.rs, shell/sidebar_list.rs);
 - src/workspace.rs lays out its rounded-card frame, and paints the card's

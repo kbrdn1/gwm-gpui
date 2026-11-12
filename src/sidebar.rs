@@ -10,6 +10,7 @@ use crate::{
   age::{Ages, Bucket},
   assets,
   project_picker::ProjectPicker,
+  sessions::{self, Carried},
   theme,
   workspace::{Place, Workspace, order, place},
 };
@@ -66,11 +67,12 @@ pub(crate) fn sidebar(
   worktrees: &[Worktree],
   selected: Option<&Worktree>,
   ages: Ages,
+  live: bool,
   scroll: &ScrollHandle,
   cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
   let main = worktrees.iter().find(|worktree| worktree.is_main);
-  // Titles and rows are all direct children of the list, in `child_of`'s
+  // Titles and worktrees are all direct children of the list, in `child_of`'s
   // order, so a row's index is what `scroll_to_item` takes. Loops, not nested
   // `map`s: every row borrows `cx` for its click listener.
   let mut list = div()
@@ -91,7 +93,19 @@ pub(crate) fn sidebar(
       let worktree = &worktrees[index];
       let age = worktree.age_seconds.map(|age| ages.label(age));
       let is_selected = selected.is_some_and(|selected| selected.path == worktree.path);
-      list = list.child(row(worktree, is_selected, age, cx));
+      let carried = sessions::carried(worktree, live, ages);
+      // Only the selected worktree lists its sessions. Monocode opens a rail
+      // while its thread is in view, chosen or working, on its own knowledge
+      // of a response under way; gwm's `active` is a 300 s window on the last
+      // artefact written, so only "chosen" carries over.
+      let nested = is_selected.then(|| sessions::nested(worktree, live, ages)).flatten();
+      // One child of the list per worktree, its sessions inside it: the
+      // children after it keep the index `child_of` gives.
+      list = list.child(
+        div()
+          .child(row(worktree, is_selected, age, carried, cx))
+          .children(nested),
+      );
     }
   }
   div()
@@ -120,8 +134,21 @@ fn section_title(title: &'static str) -> impl IntoElement {
 }
 
 /// A worktree as Monocode's detailed session row: its name and age, then its
-/// branch and what gwm knows of its state.
-fn row(worktree: &Worktree, selected: bool, age: Option<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
+/// branch, what gwm knows of its state, and the agent of its top session.
+/// While gwm calls that session active, its state stands where the age is, as
+/// "Working…" takes the time's place in Monocode's row (`session_suffix`).
+fn row(
+  worktree: &Worktree,
+  selected: bool,
+  age: Option<String>,
+  carried: Option<Carried>,
+  cx: &mut Context<Workspace>,
+) -> impl IntoElement {
+  let agent = carried.as_ref().map(sessions::agent);
+  let state = match carried {
+    Some(Carried::Top { state, .. }) => state,
+    Some(Carried::Unreadable) | None => None,
+  };
   let path = worktree.path.clone();
   let status = &worktree.status;
   let branch = worktree.branch.clone().unwrap_or_else(|| "detached HEAD".to_owned());
@@ -166,13 +193,16 @@ fn row(worktree: &Worktree, selected: bool, age: Option<String>, cx: &mut Contex
                 .text_size(px(13.))
                 .font_weight(FontWeight::SEMIBOLD),
             )
-            .children(age.map(|age| {
-              div()
-                .flex_none()
-                .text_size(px(11.))
-                .text_color(theme::ink(0.4))
-                .child(age)
-            })),
+            .children(match state {
+              Some(state) => Some(sessions::mark_label(state)),
+              None => age.map(|age| {
+                div()
+                  .flex_none()
+                  .text_size(px(11.))
+                  .text_color(theme::ink(0.4))
+                  .child(age)
+              }),
+            }),
         )
         .child(
           div()
@@ -195,7 +225,8 @@ fn row(worktree: &Worktree, selected: bool, age: Option<String>, cx: &mut Contex
                   .rounded_full()
                   .bg(theme::color(theme::DIRTY)),
               )
-            }),
+            })
+            .children(agent),
         ),
     )
 }
@@ -250,5 +281,23 @@ mod tests {
     // Main's title and row, Today's title and row, Yesterday's title: 5.
     assert_eq!(child_of(&worktrees, Some(Path::new("/yesterday")), bucket), Some(5));
     assert_eq!(child_of(&worktrees, Some(Path::new("/gone")), bucket), None);
+  }
+
+  /// The selected worktree's sessions are nested in its own child of the
+  /// list, so the rows after it keep the index the scroll is given.
+  #[test]
+  fn nested_sessions_leave_the_rows_after_them_at_their_index() {
+    let mut worktrees = [
+      worktree("main", true, None),
+      worktree("today", false, Some(1)),
+      worktree("later", false, Some(2)),
+    ];
+    let bucket = |_| Bucket::Today;
+    let index = |worktrees: &[Worktree]| child_of(worktrees, Some(Path::new("/later")), bucket);
+    assert_eq!(index(&worktrees), Some(4));
+    let session = r#"{"kind":"claude","freshness":"idle","last_activity":1794491219,"id":"s"}"#;
+    let agents = format!(r#"{{"top":{session},"sessions":[{session},{session},{session}]}}"#);
+    worktrees[1].agents = Some(Ok(serde_json::from_str(&agents).unwrap()));
+    assert_eq!(index(&worktrees), Some(4));
   }
 }

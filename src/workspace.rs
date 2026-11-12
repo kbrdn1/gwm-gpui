@@ -158,6 +158,12 @@ impl State {
     }
   }
 
+  /// Whether a daemon follows the list: it then sends a new one when gwm's
+  /// word for a session changes. Otherwise that word is as old as the list.
+  pub fn live(&self) -> bool {
+    matches!(self.source, Some(Source::Daemon(_) | Source::OwnDaemon(_)))
+  }
+
   pub fn worktrees(&self) -> &[Worktree] {
     match &self.listing {
       Listing::Ready(worktrees) => worktrees,
@@ -884,6 +890,7 @@ impl Render for Workspace {
               self.state.worktrees(),
               selected,
               ages,
+              self.state.live(),
               &self.sidebar_scroll,
               cx,
             ))
@@ -1430,6 +1437,48 @@ pub(crate) mod tests {
       state.links(state.selected().unwrap()),
       Some(&Err("gh: HTTP 502".to_owned()))
     );
+  }
+
+  #[test]
+  fn only_a_list_a_daemon_follows_is_live() {
+    let cases = [
+      (Some(Source::Daemon("/d.sock".into())), true),
+      (Some(Source::OwnDaemon("/own.sock".into())), true),
+      (Some(Source::Lost("gone".into())), false),
+      (Some(Source::Once("no daemon".into())), false),
+      (None, false),
+    ];
+    for (source, live) in cases {
+      assert_eq!(state(source.clone()).live(), live, "{source:?}");
+    }
+  }
+
+  /// A session's activity moves often, and the daemon sends a snapshot each
+  /// time: `Worktree` compares unequal, and nothing may key on that. No
+  /// `gwm status` runs again, and the selection stays where it is.
+  #[test]
+  fn a_snapshot_that_differs_only_by_its_sessions_refetches_nothing() {
+    let sessions = |last_activity: u64| {
+      let json = format!(
+        r#"{{"top":{{"kind":"claude","freshness":"active","last_activity":{last_activity},"id":"s"}},"sessions":[]}}"#
+      );
+      Some(Ok(serde_json::from_str(&json).unwrap()))
+    };
+    let mut state = state(None);
+    state.select(PathBuf::from("/fix-57"));
+    assert_eq!(state.begin_links(), Some(PathBuf::from("/fix-57")));
+    state.end_links(with_pr(706));
+    let mut listed = demo();
+    for last_activity in [1_794_491_219, 1_794_491_249] {
+      let before = listed.clone();
+      listed[1].agents = sessions(last_activity);
+      assert_ne!(listed, before);
+      state.apply(Event::Snapshot(listed.clone()));
+      assert_eq!(state.begin_links(), None);
+      assert_eq!(state.links(state.selected().unwrap()), Some(&with_pr(706)));
+      assert_eq!(state.selected, Some(PathBuf::from("/fix-57")));
+      assert_eq!(state.selected().unwrap().agents, sessions(last_activity));
+    }
   }
 
   #[test]

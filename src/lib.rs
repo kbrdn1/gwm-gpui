@@ -12,6 +12,7 @@ pub mod open;
 mod open_menu;
 mod project_picker;
 pub mod recent;
+mod sessions;
 mod sidebar;
 mod status_bar;
 mod text_input;
