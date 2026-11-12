@@ -206,19 +206,20 @@ impl State {
   }
 
   /// Moves the selection `delta` rows down the sidebar, among the rows it
-  /// shows, stopping at either end.
+  /// shows, stopping at either end. A step that moves nothing picks nothing:
+  /// the row that stands selected in place of a pick the filter hides would
+  /// take its place, and the pick would not come back with the filter cleared.
   fn step(&mut self, delta: isize) {
     let worktrees = self.worktrees();
     let order = order(worktrees, &self.query);
     let Some(last) = order.len().checked_sub(1) else {
       return;
     };
-    let position = self
-      .position(&order)
-      .unwrap_or(0)
-      .saturating_add_signed(delta)
-      .min(last);
-    self.select(worktrees[order[position]].path.clone());
+    let from = self.position(&order).unwrap_or(0);
+    let to = from.saturating_add_signed(delta).min(last);
+    if to != from {
+      self.select(worktrees[order[to]].path.clone());
+    }
   }
 
   /// The user picks a worktree: a created one no longer takes the selection.
@@ -1261,6 +1262,36 @@ pub(crate) mod tests {
     state.step(1);
     state.query = Query::default();
     assert_eq!(state.selected().unwrap().id, "feat-42");
+  }
+
+  /// A key that moves nothing picks nothing. At an end of the rows shown,
+  /// the row that stands selected in place of a hidden pick does not take
+  /// its place: the pick still comes back with the filter cleared.
+  #[test]
+  fn a_step_that_moves_nothing_keeps_the_pick_the_filter_hides() {
+    let mut state = filtered("f");
+    state.select(PathBuf::from("/docs-71"));
+    // fix-57, the first row shown, stands selected: up has nowhere to go.
+    state.step(-1);
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+    assert_eq!(state.selected, Some(PathBuf::from("/docs-71")));
+    state.query = Query::default();
+    assert_eq!(state.selected().unwrap().id, "docs-71");
+    // One row shown: down has nowhere to go either.
+    state.query = Query::new("fix");
+    state.step(1);
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+    assert_eq!(state.selected, Some(PathBuf::from("/docs-71")));
+    // Nor is it a pick made while gwm creates a worktree, which would keep
+    // the new one from taking the selection.
+    let mut state = State::new(Listing::Ready(demo()), None);
+    assert!(state.begin_create(Create::name("spike").unwrap()));
+    state.step(-1);
+    state.end_create(Ok(()));
+    let mut listed = demo();
+    listed.push(worktree("spike", false, Some(0)));
+    state.apply(Event::Snapshot(listed));
+    assert_eq!(state.selected().unwrap().id, "spike");
   }
 
   #[test]
