@@ -123,8 +123,11 @@ pub struct Refusal {
 }
 
 /// Whether a folder picked in the open panel opens: only one git places in a
-/// repo, unlike a command-line argument (see [`start`]). A bare repo, which
-/// git does not place either, is told apart. Runs git: off the UI thread.
+/// repo, unlike a command-line argument (see [`start`]). That is the
+/// maintainer's decision (#19): [`Repo::locate`] judges a pick, and gwm what it
+/// lists of an argument. So a bare repo is refused too, git placing no work
+/// tree there, and told apart, with its ways in: one of its worktrees, which
+/// git does place, or the command line. Runs git: off the UI thread.
 pub fn judge(folder: &Path) -> Result<Repo, Refusal> {
   Repo::locate(folder).map_err(|gits| {
     let folder_line = folder.display();
@@ -132,8 +135,8 @@ pub fn judge(folder: &Path) -> Result<Repo, Refusal> {
       Refusal {
         message: "A bare git repository",
         detail: format!(
-          "{gits}\n\nIt has no work tree for git to place. gwm can still list it: pass it to the app on the command \
-           line.\n\n{folder_line}"
+          "{gits}\n\nIt has no work tree here for git to place. Choose one of its worktrees instead, or pass this \
+           folder to the app on the command line.\n\n{folder_line}"
         ),
       }
     } else {
@@ -440,14 +443,28 @@ mod tests {
   }
 
   #[test]
-  fn a_picked_bare_repo_is_refused_as_one_with_the_way_to_list_it() {
+  fn a_picked_bare_repo_is_refused_as_one_with_its_two_ways_in() {
     let dir = git_init(&["--bare"]);
     let refusal = judge(dir.path()).unwrap_err();
     assert_eq!(refusal.message, "A bare git repository");
     let gits = Repo::locate(dir.path()).unwrap_err();
     assert!(refusal.detail.starts_with(&gits), "{}", refusal.detail);
+    assert!(refusal.detail.contains("one of its worktrees"), "{}", refusal.detail);
     assert!(refusal.detail.contains("command line"), "{}", refusal.detail);
     assert!(refusal.detail.ends_with(&dir.path().display().to_string()));
+
+    // What the sheet says to pick instead is accepted, and is this repo.
+    let worktree = tempfile::tempdir().unwrap();
+    let added = std::process::Command::new("git")
+      .args(["worktree", "add", "-q", "--orphan", "-b", "main"])
+      .arg(worktree.path().join("main"))
+      .current_dir(dir.path())
+      .stdin(std::process::Stdio::null())
+      .status()
+      .unwrap();
+    assert!(added.success());
+    let picked = judge(&worktree.path().join("main")).unwrap();
+    assert_eq!(picked.common_dir, dir.path().canonicalize().unwrap());
   }
 
   #[test]
