@@ -17,8 +17,9 @@ use crate::{
 };
 
 /// The daemons the app started, one holder per view: a window that starts one
-/// must not stop another's. A view stops its own when it goes; all are stopped
-/// on quit, which drops no view.
+/// must not stop another's. A view stops its own when it goes, on a thread of
+/// its own. On quit all are stopped from here, before GPUI drops the views:
+/// the process may be gone before those threads ran.
 // ponytail: a holder per window opened and per switch, never pruned: a few bytes each.
 pub type Daemons = Rc<RefCell<Vec<Spawned>>>;
 
