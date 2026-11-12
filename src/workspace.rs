@@ -717,11 +717,18 @@ impl Workspace {
     cx.notify();
   }
 
-  /// Clears the filter and hides its field. The keys go back to the list if
-  /// they went to the field.
+  /// Clears the filter and hides its field. If the keys went to the field,
+  /// they go back to the form when it is shown, else to the list: left on
+  /// the list, Enter and Tab would do nothing in a form still open.
   fn close_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.filter.focus_handle(cx).is_focused(window) {
-      window.focus(&self.focus, cx);
+      if self.form_open {
+        // ponytail: the form's first field, not the one the filter was
+        // opened from. Keep that field's handle if the difference matters.
+        self.focus_field(0, window, cx);
+      } else {
+        window.focus(&self.focus, cx);
+      }
     }
     self.filter_open = false;
     self.clear_filter(cx);
