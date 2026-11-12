@@ -1485,6 +1485,23 @@ pub(crate) mod tests {
     }
   }
 
+  /// Sessions are lines under their worktree, not rows of the list: up and
+  /// down go from a worktree to the next.
+  #[test]
+  fn the_keyboard_steps_over_a_worktrees_sessions() {
+    let session = r#"{"kind":"claude","freshness":"idle","last_activity":1794491219,"id":"s"}"#;
+    let agents = format!(r#"{{"top":{session},"sessions":[{session},{session}]}}"#);
+    let mut listed = demo();
+    listed[2].agents = Some(Ok(serde_json::from_str(&agents).unwrap()));
+    let mut state = State::new(Listing::Ready(listed), None);
+    state.step(1);
+    assert_eq!(state.selected().unwrap().id, "docs-71");
+    state.step(1);
+    assert_eq!(state.selected().unwrap().id, "fix-57");
+    state.step(-1);
+    assert_eq!(state.selected().unwrap().id, "docs-71");
+  }
+
   #[test]
   fn a_view_that_goes_tells_its_watch_to_stop() {
     let watch = Watch::default();
