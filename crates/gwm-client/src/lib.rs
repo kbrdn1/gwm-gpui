@@ -6,11 +6,13 @@
 //! the contract adds optional fields without a version bump, and asks consumers
 //! to ignore the ones they don't know.
 
+mod agents;
 mod create;
 pub mod daemon;
 mod status;
 pub mod watch;
 
+pub use agents::{Agents, Freshness, Session};
 pub use create::{Create, Number, create};
 pub use status::{IssueLink, IssueState, Links, PrLink, PrState, status};
 
@@ -99,6 +101,12 @@ pub struct Worktree {
   pub age_seconds: Option<u64>,
   pub issue: Option<u64>,
   pub pr: Option<u64>,
+  /// The agent sessions gwm matched to it: `None` when it matched none (gwm
+  /// leaves the field out), `Err` when the field is there in a shape this
+  /// build does not read, with why. Experimental tier of the contract, unlike
+  /// the fields above: see [`Agents`].
+  #[serde(default, deserialize_with = "agents::lenient")]
+  pub agents: Option<Result<Agents, String>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -298,6 +306,7 @@ mod tests {
       age_seconds: Some(1289704),
       issue: Some(57),
       pr: None,
+      agents: None,
     }
   }
 
@@ -321,6 +330,16 @@ mod tests {
   #[test]
   fn parses_the_real_output_of_gwm() {
     assert_eq!(parse(REAL.as_bytes()), Ok(vec![fix_57()]));
+  }
+
+  /// gwm leaves `agents` out when it matched no session, as in `REAL`, and
+  /// says it is never null: a null is not "none matched".
+  #[test]
+  fn a_null_agents_field_is_unreadable_not_absent() {
+    assert_eq!(parse(REAL.as_bytes()).unwrap()[0].agents, None);
+    let json = REAL.replace(r#""pr": null"#, r#""pr": null, "agents": null"#);
+    let agents = &parse(json.as_bytes()).unwrap()[0].agents;
+    assert!(matches!(agents, Some(Err(_))), "{agents:?}");
   }
 
   #[test]

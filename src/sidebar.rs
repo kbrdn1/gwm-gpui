@@ -10,6 +10,7 @@ use crate::{
   age::{Ages, Bucket},
   assets,
   project_picker::ProjectPicker,
+  sessions::{self, Carried, Mark},
   theme,
   workspace::{Place, Workspace, order, place},
 };
@@ -41,38 +42,51 @@ pub(crate) fn sections(worktrees: &[Worktree], bucket: impl Fn(u64) -> Bucket) -
   sections
 }
 
-/// The list's child index of the worktree `selected`: a title per section,
-/// then its rows, as `sidebar` lays them out.
+/// A direct child of the sidebar's list. `sidebar` draws one element for
+/// each, in this order, so a child's position here is the index
+/// `scroll_to_item` takes.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Child {
+  Title(&'static str),
+  /// The worktree at this index, with its sessions inside it once it is
+  /// selected: they are no children of the list.
+  Worktree(usize),
+}
+
+/// The list's children: a title per section, then its worktrees.
+pub(crate) fn children(worktrees: &[Worktree], bucket: impl Fn(u64) -> Bucket) -> Vec<Child> {
+  let mut children = Vec::new();
+  for section in sections(worktrees, bucket) {
+    children.push(Child::Title(section.title));
+    children.extend(section.rows.into_iter().map(Child::Worktree));
+  }
+  children
+}
+
+/// The list's child index of the worktree `selected`.
 pub(crate) fn child_of(
   worktrees: &[Worktree],
   selected: Option<&Path>,
   bucket: impl Fn(u64) -> Bucket,
 ) -> Option<usize> {
   let selected = selected?;
-  let mut child = 0;
-  for section in sections(worktrees, bucket) {
-    child += 1;
-    for index in section.rows {
-      if worktrees[index].path == selected {
-        return Some(child);
-      }
-      child += 1;
-    }
-  }
-  None
+  children(worktrees, bucket)
+    .iter()
+    .position(|child| matches!(child, Child::Worktree(index) if worktrees[*index].path == selected))
 }
 
 pub(crate) fn sidebar(
   worktrees: &[Worktree],
   selected: Option<&Worktree>,
   ages: Ages,
+  live: bool,
   scroll: &ScrollHandle,
   cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
   let main = worktrees.iter().find(|worktree| worktree.is_main);
-  // Titles and rows are all direct children of the list, in `child_of`'s
-  // order, so a row's index is what `scroll_to_item` takes. Loops, not nested
-  // `map`s: every row borrows `cx` for its click listener.
+  // One element per child, in `children`'s order: a child's position is the
+  // index `scroll_to_item` takes. A loop, not a `map`: every row borrows `cx`
+  // for its click listener.
   let mut list = div()
     .id("worktrees")
     .track_scroll(scroll)
@@ -81,18 +95,28 @@ pub(crate) fn sidebar(
     .overflow_y_scroll()
     .px(px(8.))
     .pb(px(12.));
-  for (position, section) in sections(worktrees, |age| ages.bucket(age)).into_iter().enumerate() {
-    list = list.child(
-      div()
+  for (position, child) in children(worktrees, |age| ages.bucket(age)).into_iter().enumerate() {
+    list = list.child(match child {
+      Child::Title(title) => div()
         .when(position > 0, |title| title.mt(px(12.)))
-        .child(section_title(section.title)),
-    );
-    for index in section.rows {
-      let worktree = &worktrees[index];
-      let age = worktree.age_seconds.map(|age| ages.label(age));
-      let is_selected = selected.is_some_and(|selected| selected.path == worktree.path);
-      list = list.child(row(worktree, is_selected, age, cx));
-    }
+        .child(section_title(title))
+        .into_any_element(),
+      Child::Worktree(index) => {
+        let worktree = &worktrees[index];
+        let age = worktree.age_seconds.map(|age| ages.label(age));
+        let is_selected = selected.is_some_and(|selected| selected.path == worktree.path);
+        let carried = sessions::carried(worktree, live, ages);
+        // Only the selected worktree lists its sessions. Monocode opens a rail
+        // while its thread is in view, chosen or working, on its own knowledge
+        // of a response under way; gwm's `active` is a 300 s window on the last
+        // artefact written, so only "chosen" carries over.
+        let nested = is_selected.then(|| sessions::nested(worktree, live, ages)).flatten();
+        div()
+          .child(row(worktree, is_selected, age, carried, cx))
+          .children(nested)
+          .into_any_element()
+      }
+    });
   }
   div()
     .w(theme::SIDEBAR_WIDTH)
@@ -120,8 +144,18 @@ fn section_title(title: &'static str) -> impl IntoElement {
 }
 
 /// A worktree as Monocode's detailed session row: its name and age, then its
-/// branch and what gwm knows of its state.
-fn row(worktree: &Worktree, selected: bool, age: Option<String>, cx: &mut Context<Workspace>) -> impl IntoElement {
+/// branch, what gwm knows of its state, and the agent of its top session.
+/// While gwm calls that session active, its state stands where the age is, as
+/// "Working…" takes the time's place in Monocode's row (`session_suffix`).
+fn row(
+  worktree: &Worktree,
+  selected: bool,
+  age: Option<String>,
+  carried: Option<Carried>,
+  cx: &mut Context<Workspace>,
+) -> impl IntoElement {
+  let agent = carried.as_ref().map(sessions::agent);
+  let active = matches!(carried, Some(Carried::Top { active: true, .. }));
   let path = worktree.path.clone();
   let status = &worktree.status;
   let branch = worktree.branch.clone().unwrap_or_else(|| "detached HEAD".to_owned());
@@ -166,13 +200,17 @@ fn row(worktree: &Worktree, selected: bool, age: Option<String>, cx: &mut Contex
                 .text_size(px(13.))
                 .font_weight(FontWeight::SEMIBOLD),
             )
-            .children(age.map(|age| {
-              div()
-                .flex_none()
-                .text_size(px(11.))
-                .text_color(theme::ink(0.4))
-                .child(age)
-            })),
+            .children(if active {
+              Some(sessions::mark_label(Mark::Active))
+            } else {
+              age.map(|age| {
+                div()
+                  .flex_none()
+                  .text_size(px(11.))
+                  .text_color(theme::ink(0.4))
+                  .child(age)
+              })
+            }),
         )
         .child(
           div()
@@ -195,7 +233,8 @@ fn row(worktree: &Worktree, selected: bool, age: Option<String>, cx: &mut Contex
                   .rounded_full()
                   .bg(theme::color(theme::DIRTY)),
               )
-            }),
+            })
+            .children(agent),
         ),
     )
 }
@@ -250,5 +289,31 @@ mod tests {
     // Main's title and row, Today's title and row, Yesterday's title: 5.
     assert_eq!(child_of(&worktrees, Some(Path::new("/yesterday")), bucket), Some(5));
     assert_eq!(child_of(&worktrees, Some(Path::new("/gone")), bucket), None);
+  }
+
+  /// A worktree's sessions are drawn inside its own child of the list: they
+  /// add none, so the rows after it keep the index the scroll is given.
+  #[test]
+  fn a_worktrees_sessions_are_no_children_of_the_list() {
+    let mut worktrees = [
+      worktree("main", true, None),
+      worktree("today", false, Some(1)),
+      worktree("later", false, Some(2)),
+    ];
+    let session = r#"{"kind":"claude","freshness":"idle","last_activity":1794491219,"id":"s"}"#;
+    let agents = format!(r#"{{"top":{session},"sessions":[{session},{session},{session}]}}"#);
+    worktrees[1].agents = Some(Ok(serde_json::from_str(&agents).unwrap()));
+    let bucket = |_| Bucket::Today;
+    assert_eq!(
+      children(&worktrees, bucket),
+      [
+        Child::Title("Main"),
+        Child::Worktree(0),
+        Child::Title("Today"),
+        Child::Worktree(1),
+        Child::Worktree(2),
+      ]
+    );
+    assert_eq!(child_of(&worktrees, Some(Path::new("/later")), bucket), Some(4));
   }
 }

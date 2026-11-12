@@ -11,6 +11,8 @@ use gpui::{Background, BoxShadow, Hsla, Pixels, linear_color_stop, linear_gradie
 pub const ACCENT: u32 = 0xd4825d;
 pub const CLEAN: u32 = 0x86e89a;
 pub const DIRTY: u32 = 0xffdf61;
+/// An agent session gwm calls active: its TUI gives it its "clean" green.
+pub const ACTIVE: u32 = CLEAN;
 /// Something works, but less than it should: the list is not live. gwm calls this yellow "warning".
 pub const WARNING: u32 = 0xffdf61;
 pub const ERROR: u32 = 0xff7a7a;
@@ -73,6 +75,12 @@ pub fn wash() -> Hsla {
 /// Hairlines and the card's border.
 pub fn card_border() -> Hsla {
   ink(0.08)
+}
+
+/// The rail a worktree's sessions hang on: Monocode's `rail_color`, its ink
+/// mixed into the surface at 14%.
+pub fn rail() -> Hsla {
+  ink(0.14)
 }
 
 /// A hovered row or button.

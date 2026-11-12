@@ -62,6 +62,14 @@ impl Ages {
   pub fn bucket(self, age_seconds: u64) -> Bucket {
     Bucket::of(local_day(self.started(age_seconds)), local_day(self.now))
   }
+
+  /// The age of a moment gwm dates itself, in seconds since the epoch (a
+  /// session's last activity): counted from that moment, whenever the
+  /// snapshot arrived.
+  pub fn since(self, unix: u64) -> String {
+    let at = unix.cast_signed();
+    label((self.now - at).max(0).cast_unsigned(), local_day(at))
+  }
 }
 
 /// "now", "25m", "1h 37m", "6d", then the day the branch started, "Oct 22":
@@ -146,6 +154,18 @@ mod tests {
       now: 1_000_000 + 3600,
     };
     assert_eq!(ages.label(25 * 60), "1h 25m");
+  }
+
+  /// gwm's clock ahead of this one is "now", not a negative age.
+  #[test]
+  fn a_moment_gwm_dates_is_aged_from_itself_not_from_its_snapshot() {
+    let ages = Ages {
+      received_at: 1_000_000,
+      now: 1_000_000 + 3600,
+    };
+    assert_eq!(ages.since(1_000_000 + 3600 - 25 * 60), "25m");
+    assert_eq!(ages.since(1_000_000 - 3600), "2h");
+    assert_eq!(ages.since(1_000_000 + 7200), "now");
   }
 
   #[test]

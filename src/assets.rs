@@ -10,6 +10,9 @@ pub const BRANCH: &str = "icons/git-branch.svg";
 pub const FOLDER: &str = "icons/folder-01.svg";
 pub const CHEVRON_DOWN: &str = "icons/chevron-down.svg";
 pub const CHECK: &str = "icons/check.svg";
+/// An agent session, whatever the agent: the agents' own marks are their
+/// trademarks, and are not shipped here.
+pub const AGENT: &str = "icons/bot.svg";
 
 const ICONS: &[(&str, &[u8])] = &[
   (SIDEBAR, include_bytes!("../assets/icons/sidebar.svg")),
@@ -17,6 +20,7 @@ const ICONS: &[(&str, &[u8])] = &[
   (FOLDER, include_bytes!("../assets/icons/folder-01.svg")),
   (CHEVRON_DOWN, include_bytes!("../assets/icons/chevron-down.svg")),
   (CHECK, include_bytes!("../assets/icons/check.svg")),
+  (AGENT, include_bytes!("../assets/icons/bot.svg")),
 ];
 
 pub struct Assets;

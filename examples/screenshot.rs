@@ -10,12 +10,13 @@
 //!   --keys "<keys>"       then type these keystrokes, through the app's own bindings
 //!   --click <x>,<y>       then click there, in window points
 //!   --cmd-click <x>,<y>   then click there with ⌘ held
+//!   --scroll <x>,<y>,<dy> then scroll what is there <dy> points further down
 //!   --wait <ms>           then let <ms> pass, for what arrives off the UI thread
 //!   --live <ms>           follow the repo live, as the app does, for <ms> before rendering
 //! ```
 //!
-//! `--keys`, `--click`, `--cmd-click` and `--wait` repeat, and apply in the
-//! order given: `--click` on a field, then `--keys "4 2"` types into it.
+//! `--keys`, `--click`, `--cmd-click`, `--scroll` and `--wait` repeat, and
+//! apply in the order given: `--click` on a field, then `--keys "4 2"` types into it.
 //!
 //! `--landing`, in place of a repo, opens the window on the landing view, as a
 //! launch from the Finder does, without the open panel. `--row`,
@@ -40,7 +41,8 @@ use std::{
 };
 
 use gpui::{
-  AnyWindowHandle, AppContext, Bounds, Focusable, Modifiers, VisualTestAppContext, WindowBounds, point, px, size,
+  AnyWindowHandle, AppContext, Bounds, Focusable, Modifiers, ScrollDelta, ScrollEvent, VisualTestAppContext,
+  WindowBounds, point, px, size,
 };
 use gwm_client::watch::{Source, Spawned};
 use gwm_gpui::{
@@ -53,6 +55,7 @@ use gwm_gpui::{
 enum Step {
   Keys(String),
   Click(f32, f32, Modifiers),
+  Scroll(f32, f32, f32),
   Wait(u64),
 }
 
@@ -76,7 +79,7 @@ struct Options {
 
 fn main() -> Result<(), Box<dyn Error>> {
   let usage = "usage: screenshot <repo>|--landing <out.png> [--row n] [--no-sidebar] [--keys \"…\"] [--click x,y] \
-               [--cmd-click x,y] [--wait ms] [--live ms]";
+               [--cmd-click x,y] [--scroll x,y,dy] [--wait ms] [--live ms]";
   let mut args = std::env::args().skip(1);
   let (Some(repo), Some(out)) = (args.next(), args.next().map(PathBuf::from)) else {
     return Err(usage.into());
@@ -98,6 +101,12 @@ fn main() -> Result<(), Box<dyn Error>> {
           ..Modifiers::default()
         };
         options.steps.push(Step::Click(x.parse()?, y.parse()?, modifiers));
+      }
+      "--scroll" => {
+        let value = value()?;
+        let mut parts = value.split(',').map(str::parse);
+        let mut part = || parts.next().ok_or(usage);
+        options.steps.push(Step::Scroll(part()??, part()??, part()??));
       }
       "--wait" => options.steps.push(Step::Wait(value()?.parse()?)),
       "--live" => options.live = Some(value()?.parse()?),
@@ -181,6 +190,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     match step {
       Step::Keys(keys) => cx.simulate_keystrokes(window, keys),
       Step::Click(x, y, modifiers) => cx.simulate_click(window, point(px(*x), px(*y)), *modifiers),
+      Step::Scroll(x, y, down) => cx.simulate_event(
+        window,
+        ScrollEvent {
+          position: point(px(*x), px(*y)),
+          delta: ScrollDelta::Pixels(point(px(0.), px(-*down))),
+          ..Default::default()
+        },
+      ),
       Step::Wait(millis) => wait(&mut cx, *millis),
     }
     cx.run_until_parked();

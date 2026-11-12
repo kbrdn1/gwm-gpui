@@ -35,6 +35,10 @@ The sidebar's top row names the repo: a click on it lists the repos opened befor
 
 Up and down move the selection; a click selects a worktree. The title bar's sidebar button hides the sidebar. In the selected worktree's card, "Open in…" lists the editors and terminals installed in `/Applications`, `~/Applications` and the system's Utilities, and "Remove…" removes the worktree through gwm, keeping its branch, once you confirm.
 
+A worktree gwm matched agent sessions to (Claude Code, Codex, opencode, Mistral Vibe) says so on its row. Its second line ends with the agent of its most recent session, and while gwm calls that session `active`, `active` stands where the branch's age is otherwise. The selected worktree lists its sessions under its row, most recent first: the session's name, then `active` or the age of its last activity. Five are listed, the older ones are counted. Where a worktree's sessions are not all of one agent, each line names its own. The app only reads sessions: it attaches and detaches none.
+
+`active` is gwm's word, for a session whose files changed in the last 300 seconds and that has not ended, and the app never works it out itself. It is shown on a live list, which gwm's daemon updates when the word changes. On a list that is not live, the word is as old as the list, so every session shows the age of its last activity instead.
+
 Once the list is shown, the title bar's `+` opens the "New worktree" form in the card: from an existing issue's number (gwm reads its description through the forge's CLI, `gh` or `glab`, and its type from its labels when `.gwm.toml` maps them to types, otherwise you give the type; a worktree that already has the issue is selected), from a type, an issue number and a description, or with a free name, which is the branch. Enter creates it, Escape closes the form, Tab moves to the next field. Once gwm is done, the new worktree is selected as soon as the list shows it. A refusal shows gwm's own words. gwm runs with no terminal to ask on: a `.gwm.toml` whose bootstrap commands you have not approved is refused, and `gwm trust add`, run in a terminal in the repo, approves it.
 
 ## How it talks to gwm
@@ -48,6 +52,7 @@ gwm stays the source of truth: this app holds no worktree logic. It is one more 
 | Remove a worktree | `gwm remove <name>`, a subprocess, once a fresh `gwm list --format=json` shows that name alone on the selected path: gwm removes by pattern and falls back to a substring match, it has no remove by path |
 | Create a worktree | `gwm create --issue <N> [--type <type>]`, `gwm create <type> <issue> <desc>` or `gwm create --name <name>`, a subprocess with stdin closed, never `--allow-bootstrap`, and `GWM_ALLOW_BOOTSTRAP` removed from its environment (as for `gwm remove`). The new worktree is found in the next list by its issue number or its branch, on a path that was not listed before, not in gwm's text output |
 | PR and CI | `gwm status --json`, run in the selected worktree's directory (by path: gwm's name patterns leave the main worktree out), each time a worktree is selected and when the list shows another branch, issue or PR for it, never per snapshot, one at a time, stopped after 30 s. Only an `https://` link opens |
+| Agent sessions | the `agents` field of the list's rows, from the daemon as from `gwm list`. It is in the contract's experimental tier, which may change without a version bump: it is read apart from the row, so a shape this build does not know is reported on the worktree and the list is still read. Never polled: the daemon sends a new list when a session comes, goes, writes or changes freshness |
 | Review | a `gwm` subprocess (planned) |
 
 ### Live updates

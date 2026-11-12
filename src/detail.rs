@@ -11,6 +11,7 @@ use crate::{
   age::Ages,
   apps::Installed,
   open_menu::open_menu,
+  sessions,
   sidebar::one_line,
   theme,
   title_bar::tile,
@@ -128,6 +129,9 @@ pub(crate) fn detail(
         .and_then(|links| links.as_ref().err())
         .map(|error| error_text(format!("Issue and pull request: {error}"))),
     )
+    // The sessions are in the sidebar. Why they could not be read has no
+    // room there.
+    .children(sessions::unreadable(worktree).map(error_text))
     .when(links.is_some() && refreshing, |card| {
       card.child(
         div()
