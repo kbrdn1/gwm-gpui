@@ -10,7 +10,7 @@ use crate::{
   age::{Ages, Bucket},
   assets,
   project_picker::ProjectPicker,
-  sessions::{self, Carried},
+  sessions::{self, Carried, Mark},
   theme,
   workspace::{Place, Workspace, order, place},
 };
@@ -155,10 +155,7 @@ fn row(
   cx: &mut Context<Workspace>,
 ) -> impl IntoElement {
   let agent = carried.as_ref().map(sessions::agent);
-  let state = match carried {
-    Some(Carried::Top { state, .. }) => state,
-    Some(Carried::Unreadable) | None => None,
-  };
+  let active = matches!(carried, Some(Carried::Top { active: true, .. }));
   let path = worktree.path.clone();
   let status = &worktree.status;
   let branch = worktree.branch.clone().unwrap_or_else(|| "detached HEAD".to_owned());
@@ -203,15 +200,16 @@ fn row(
                 .text_size(px(13.))
                 .font_weight(FontWeight::SEMIBOLD),
             )
-            .children(match state {
-              Some(state) => Some(sessions::mark_label(state)),
-              None => age.map(|age| {
+            .children(if active {
+              Some(sessions::mark_label(Mark::Active))
+            } else {
+              age.map(|age| {
                 div()
                   .flex_none()
                   .text_size(px(11.))
                   .text_color(theme::ink(0.4))
                   .child(age)
-              }),
+              })
             }),
         )
         .child(

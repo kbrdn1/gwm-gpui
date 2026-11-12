@@ -46,10 +46,9 @@ pub(crate) fn mark(session: &Session, live: bool, ages: Ages) -> Mark {
 /// What a worktree's row says of the sessions gwm matched to it.
 #[derive(Debug, PartialEq)]
 pub(crate) enum Carried {
-  /// The top session: its kind, for the row's second line, and its state
-  /// when it takes the age's place on the first. An age does not: the
-  /// branch's own stays there.
-  Top { kind: String, state: Option<Mark> },
+  /// The top session: its kind, for the row's second line, and whether gwm
+  /// calls it active, which takes the age's place on the first.
+  Top { kind: String, active: bool },
   /// gwm sent sessions this build could not read.
   Unreadable,
 }
@@ -58,7 +57,7 @@ pub(crate) fn carried(worktree: &Worktree, live: bool, ages: Ages) -> Option<Car
   Some(match worktree.agents.as_ref()? {
     Ok(agents) => Carried::Top {
       kind: agents.top.kind.clone(),
-      state: Some(mark(&agents.top, live, ages)).filter(|mark| !matches!(mark, Mark::Since(_))),
+      active: mark(&agents.top, live, ages) == Mark::Active,
     },
     Err(_) => Carried::Unreadable,
   })
@@ -313,21 +312,34 @@ mod tests {
       session("claude", "active", NOW - 60, Some("One")),
       session("codex", "idle", NOW - 3600, Some("Two")),
     ]);
-    let top = |state| {
+    let top = |active| {
       Some(Carried::Top {
         kind: "claude".to_owned(),
-        state,
+        active,
       })
     };
-    assert_eq!(carried(&active, true, AGES), top(Some(Mark::Active)));
+    assert_eq!(carried(&active, true, AGES), top(true));
     // Not live: the branch's age keeps its place.
-    assert_eq!(carried(&active, false, AGES), top(None));
+    assert_eq!(carried(&active, false, AGES), top(false));
     let idle = with_sessions(&[session("claude", "idle", NOW - 3600, Some("One"))]);
-    assert_eq!(carried(&idle, true, AGES), top(None));
+    assert_eq!(carried(&idle, true, AGES), top(false));
+  }
+
+  /// Only `active` takes the age's place on the worktree's row. A word this
+  /// build does not know stays on the session's own line.
+  #[test]
+  fn an_unknown_freshness_is_on_the_sessions_line_not_in_the_ages_place() {
     let waiting = with_sessions(&[session("claude", "waiting", NOW - 60, None)]);
     assert_eq!(
       carried(&waiting, true, AGES),
-      top(Some(Mark::Word("waiting".to_owned())))
+      Some(Carried::Top {
+        kind: "claude".to_owned(),
+        active: false,
+      })
+    );
+    assert_eq!(
+      lines(agents(&waiting), true, AGES).0[0].mark,
+      Mark::Word("waiting".to_owned())
     );
   }
 
