@@ -8,7 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use gpui::{
-  Action, App, FontWeight, MouseButton, SharedString, Window, anchored, deferred, div, point, prelude::*, px,
+  Action, App, ClickEvent, FontWeight, MouseButton, SharedString, Window, anchored, deferred, div, point, prelude::*,
+  px,
 };
 
 use crate::{
@@ -30,7 +31,8 @@ pub struct OpenRepo(pub PathBuf, pub Target);
 #[action(namespace = gwm_gpui, no_json)]
 pub struct OpenFolder(pub Target);
 
-const WIDTH: f32 = 286.;
+/// The menu's width, and the landing view's list, which has its rows.
+pub(crate) const WIDTH: f32 = 286.;
 
 /// The row: the repo's name and the main worktree's branch, as before, now
 /// a button.
@@ -148,23 +150,15 @@ fn menu(recent: &[Entry], current: Option<&Path>, open: &gpui::Entity<bool>) -> 
         recent
           .iter()
           .enumerate()
-          .map(|(index, entry)| row(index, entry, current == Some(entry.key.as_path()), open)),
+          .map(|(index, entry)| row(index, entry, current == Some(entry.key.as_path())).on_click(close(open))),
       )
     }
   });
-  let close = open.clone();
-  let footer = div().p(px(6.)).border_t_1().border_color(theme::ink(0.07)).child(
-    item("project-open-folder")
-      .text_color(theme::ink(0.75))
-      .hover(|item| item.bg(theme::selected()).text_color(theme::ink(1.)))
-      .on_click(move |click, window, cx| {
-        close.update(cx, |open, cx| set(open, false, cx));
-        let target = Target::of_click(click.modifiers(), window.window_handle());
-        window.dispatch_action(OpenFolder(target).boxed_clone(), cx);
-      })
-      .child(slot(icon(assets::FOLDER, 14., theme::ink(0.75))))
-      .child("Open folder…"),
-  );
+  let footer = div()
+    .p(px(6.))
+    .border_t_1()
+    .border_color(theme::ink(0.07))
+    .child(open_folder().on_click(close(open)));
   deferred(
     anchored().snap_to_window_with_margin(px(8.)).child(
       div()
@@ -186,15 +180,21 @@ fn menu(recent: &[Entry], current: Option<&Path>, open: &gpui::Entity<bool>) -> 
   .with_priority(2)
 }
 
+/// A click on one of the menu's items closes it, beside what the item does.
+fn close(open: &gpui::Entity<bool>) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+  let open = open.clone();
+  move |_, _, cx| open.update(cx, |open, cx| set(open, false, cx))
+}
+
 /// A repo: a check on the window's own, its name, then where it lives, as
-/// Monocode's project rows.
-fn row(index: usize, entry: &Entry, current: bool, open: &gpui::Entity<bool>) -> impl IntoElement {
-  let (path, open) = (entry.path.clone(), open.clone());
+/// Monocode's project rows. A click opens it where the click says, in the
+/// menu as in the landing view.
+pub(crate) fn row(index: usize, entry: &Entry, current: bool) -> gpui::Stateful<gpui::Div> {
+  let path = entry.path.clone();
   item(SharedString::from(format!("project-recent-{index}")))
     .text_color(theme::ink(0.75))
     .hover(|item| item.bg(theme::hover()).text_color(theme::ink(1.)))
     .on_click(move |click, window, cx| {
-      open.update(cx, |open, cx| set(open, false, cx));
       let target = Target::of_click(click.modifiers(), window.window_handle());
       window.dispatch_action(OpenRepo(path.clone(), target).boxed_clone(), cx);
     })
@@ -217,6 +217,19 @@ fn row(index: usize, entry: &Entry, current: bool, open: &gpui::Entity<bool>) ->
         .text_size(px(11.))
         .text_color(theme::ink(0.4)),
     )
+}
+
+/// "Open folder…": asks for a folder, opened where the click says.
+pub(crate) fn open_folder() -> gpui::Stateful<gpui::Div> {
+  item("project-open-folder")
+    .text_color(theme::ink(0.75))
+    .hover(|item| item.bg(theme::selected()).text_color(theme::ink(1.)))
+    .on_click(|click, window, cx| {
+      let target = Target::of_click(click.modifiers(), window.window_handle());
+      window.dispatch_action(OpenFolder(target).boxed_clone(), cx);
+    })
+    .child(slot(icon(assets::FOLDER, 14., theme::ink(0.75))))
+    .child("Open folder…")
 }
 
 fn item(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
