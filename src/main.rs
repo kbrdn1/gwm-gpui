@@ -6,7 +6,7 @@ use gwm_gpui::{
   OpenFolder, OpenRepo,
   assets::Assets,
   login_shell,
-  open::{self, Daemons},
+  open::{self, Daemons, Target},
   recent::Projects,
 };
 
@@ -48,20 +48,22 @@ fn main() {
       .detach();
       cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-o", OpenFolder, None),
+        KeyBinding::new("cmd-o", OpenFolder(Target::NewWindow), None),
       ]);
       gwm_gpui::bind_keys(cx);
       cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
       // The way out of a window on the wrong folder, and into another repo.
       let to_pick = daemons.clone();
-      cx.on_action(move |_: &OpenFolder, cx: &mut App| open::folder(to_pick.clone(), cx));
-      // A repo from the project menu's recent list.
+      cx.on_action(move |OpenFolder(target): &OpenFolder, cx: &mut App| open::folder(*target, to_pick.clone(), cx));
+      // A repo from the project menu's recent list: in its window, or with ⌘ in another.
       let to_open = daemons.clone();
-      cx.on_action(move |OpenRepo(repo): &OpenRepo, cx: &mut App| open::repo(repo.clone(), &to_open, cx));
+      cx.on_action(move |OpenRepo(repo, target): &OpenRepo, cx: &mut App| {
+        open::repo(repo.clone(), *target, &to_open, cx);
+      });
       cx.set_global(Projects::default());
       cx.set_menus([
         Menu::new("gwm").items([MenuItem::action("Quit gwm", Quit)]),
-        Menu::new("File").items([MenuItem::action("Open…", OpenFolder)]),
+        Menu::new("File").items([MenuItem::action("Open…", OpenFolder(Target::NewWindow))]),
       ]);
       cx.on_window_closed(|cx, _| {
         if cx.windows().is_empty() {
@@ -71,11 +73,11 @@ fn main() {
       .detach();
 
       if let Some(repo) = repo {
-        open::repo(repo, &daemons, cx);
+        open::repo(repo, Target::NewWindow, &daemons, cx);
         return;
       }
       // In front, or the panel opens behind the app that launched this one.
       cx.activate(true);
-      open::folder(daemons, cx);
+      open::folder(Target::NewWindow, daemons, cx);
     });
 }
