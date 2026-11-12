@@ -347,6 +347,7 @@ mod tests {
       age_seconds: None,
       issue: None,
       pr: None,
+      agents: None,
     }
   }
 
