@@ -17,7 +17,9 @@ A native desktop app for [gwm](https://github.com/kbrdn1/gwm-cli), the git workt
 cargo run -- /path/to/a/repo   # defaults to the current directory
 ```
 
-The first build compiles GPUI and takes several minutes. Without an argument, outside a repo, the app asks for a folder. A folder in no repo still opens, and the window says what git and gwm make of it; File > Open… (⌘O) opens another folder in a new window.
+The first build compiles GPUI and takes several minutes. Without an argument, outside a repo, the window opens on a landing view, the repos opened before and "Open folder…", with the folder picker over it. Cancel the picker and the view stays, to pick from. File > Open… (⌘O) opens a folder in a new window.
+
+A picked folder that is in no git repo is not opened: a sheet gives git's reason, and its "Choose another folder…" reopens the picker. A path given as an argument is taken as it is, and the window says what git and gwm make of it: it is how a bare repo, which has no work tree for git, is listed.
 
 ## Install
 
@@ -29,7 +31,7 @@ It is a release build: GPUI compiles again, and takes several GB under `target/`
 
 A Finder launch gets launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), without `gwm` or Homebrew. When `gwm` is not on the `PATH` it was given, the app asks your login shell (`$SHELL -l -i`, so `.zprofile` and `.zshrc`) for its own, and gives up after 5 seconds. The daemon it starts inherits it.
 
-The sidebar's top row names the repo: a click on it lists the repos opened before, most recent first, and "Open folder…". A click on a repo, or a folder picked through "Open folder…", takes the place of the repo the window showed. With ⌘ held, it opens in a new window instead, so several repos are followed at once, one per window. A repo another window already shows, from any of its worktrees, brings that window forward. The list keeps the last 10 repos, in `~/Library/Application Support/gwm-gpui/recent`, and hides those whose folder is gone.
+The sidebar's top row names the repo: a click on it lists the repos opened before, most recent first, and "Open folder…". A click on a repo, or a folder picked through "Open folder…", takes the place of the repo the window showed, or of the landing view. With ⌘ held, it opens in a new window instead, so several repos are followed at once, one per window. A repo another window already shows, from any of its worktrees, brings that window forward. The list keeps the last 10 repos, in `~/Library/Application Support/gwm-gpui/recent`, and hides those whose folder is gone.
 
 Up and down move the selection; a click selects a worktree. The title bar's sidebar button hides the sidebar. In the selected worktree's card, "Open in…" lists the editors and terminals installed in `/Applications`, `~/Applications` and the system's Utilities, and "Remove…" removes the worktree through gwm, keeping its branch, once you confirm.
 
