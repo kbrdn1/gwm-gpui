@@ -6,6 +6,7 @@ mod apps;
 pub mod assets;
 mod create_form;
 mod detail;
+mod landing;
 pub mod login_shell;
 pub mod open;
 mod open_menu;
@@ -22,6 +23,7 @@ use gpui::{
   App, Bounds, KeyBinding, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowOptions, point, px, size,
 };
 
+pub use landing::Landing;
 pub use project_picker::{OpenFolder, OpenRepo};
 pub use workspace::Workspace;
 

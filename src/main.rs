@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
 use gpui::{App, Application, KeyBinding, Menu, MenuItem, actions};
-use gwm_client::{Repo, watch::Spawned};
+use gwm_client::watch::Spawned;
 use gwm_gpui::{
   OpenFolder, OpenRepo,
   assets::Assets,
   login_shell,
-  open::{self, Daemons, Target},
+  open::{self, Daemons, Start, Target},
   recent::Projects,
 };
 
@@ -27,13 +27,9 @@ fn main() {
   }
 
   // The repo to list: the first argument, else the current directory if it is
-  // in one. The Finder starts the app in `/`: then the user picks a folder. A
-  // given argument is not checked: a bare repo is no work tree for git, but gwm
-  // lists it, and the window says why when nothing can be listed.
-  let repo = std::env::args_os()
-    .nth(1)
-    .map(PathBuf::from)
-    .or_else(|| Repo::locate(".".as_ref()).is_ok().then(|| PathBuf::from(".")));
+  // in one. The Finder starts the app in `/`: then the landing view, where the
+  // user picks one.
+  let start = open::start(std::env::args_os().nth(1).map(PathBuf::from), ".".as_ref());
 
   Application::with_platform(gpui_platform::current_platform(false))
     .with_assets(Assets)
@@ -52,7 +48,7 @@ fn main() {
       ]);
       gwm_gpui::bind_keys(cx);
       cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
-      // The way out of a window on the wrong folder, and into another repo.
+      // Into another repo, from any window and from the landing view.
       let to_pick = daemons.clone();
       cx.on_action(move |OpenFolder(target): &OpenFolder, cx: &mut App| open::folder(*target, to_pick.clone(), cx));
       // A repo from the project menu's recent list: in its window, or with ⌘ in another.
@@ -72,12 +68,9 @@ fn main() {
       })
       .detach();
 
-      if let Some(repo) = repo {
-        open::repo(repo, Target::NewWindow, &daemons, cx);
-        return;
+      match start {
+        Start::Repo(repo) => open::repo(repo, Target::NewWindow, &daemons, cx),
+        Start::Landing => open::landing(daemons, cx),
       }
-      // In front, or the panel opens behind the app that launched this one.
-      cx.activate(true);
-      open::folder(Target::NewWindow, daemons, cx);
     });
 }
