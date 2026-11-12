@@ -18,13 +18,21 @@ assets/icons/LICENSE-MONOCODE):
   bar, traffic light position, minimum size (crates/monocode-gpui/src/main.rs);
 - src/title_bar.rs takes its title bar and tab plate, and its tile's rim
   (theme.rs title_tab_plate, tab_tile.rs);
-- src/sidebar.rs takes its section label and its detailed session row
-  metrics (theme.rs section_label, shell.rs, shell/sidebar_list.rs);
+- src/sidebar.rs takes its section label, its detailed session row
+  metrics and its "New" navigation row: the glyph, the word, the shortcut
+  in its trailing column (theme.rs section_label, shell.rs,
+  shell/sidebar_list.rs sidebar_navigation);
+- src/filter.rs takes its header's search button: the 24 px chrome button
+  at the right of the project picker, lit while the search is open
+  (shell.rs sidebar-search, theme.rs chrome_button);
 - src/sessions.rs takes its rails: a row's sessions hung on a line under
   it, the step and the nested row's metrics, and the state that stands in
   the time's place while the agent works (shell/rails.rs, activity.rs
   rail_from, shell.rs session_row_with and session_suffix, theme.rs
   rail_color);
+- src/working.rs takes its "Working" card of live agents: the header with
+  a dot, the word and a count, a card per working session and their
+  metrics, the cap of four cards shown at once (shell/live_agents.rs);
 - src/age.rs reimplements its relative time format and day buckets
   (crates/monocode-core/src/time.rs, shell/sidebar_list.rs);
 - src/workspace.rs lays out its rounded-card frame, and paints the card's

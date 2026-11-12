@@ -8,6 +8,7 @@ use gwm_gpui::{
   login_shell,
   open::{self, Daemons, Start, Target},
   recent::Projects,
+  workspace::NewWorktree,
 };
 
 actions!(gwm_gpui, [Quit]);
@@ -59,7 +60,12 @@ fn main() {
       cx.set_global(Projects::default());
       cx.set_menus([
         Menu::new("gwm").items([MenuItem::action("Quit gwm", Quit)]),
-        Menu::new("File").items([MenuItem::action("Open…", OpenFolder(Target::NewWindow))]),
+        // New Worktree is the workspace's own action: greyed out on the landing
+        // view, which has no repo to create one in.
+        Menu::new("File").items([
+          MenuItem::action("New Worktree", NewWorktree),
+          MenuItem::action("Open…", OpenFolder(Target::NewWindow)),
+        ]),
       ]);
       cx.on_window_closed(|cx, _| {
         if cx.windows().is_empty() {

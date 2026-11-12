@@ -13,6 +13,8 @@ pub const CHECK: &str = "icons/check.svg";
 /// An agent session, whatever the agent: the agents' own marks are their
 /// trademarks, and are not shipped here.
 pub const AGENT: &str = "icons/bot.svg";
+pub const NEW: &str = "icons/square-plus.svg";
+pub const SEARCH: &str = "icons/search.svg";
 
 const ICONS: &[(&str, &[u8])] = &[
   (SIDEBAR, include_bytes!("../assets/icons/sidebar.svg")),
@@ -21,6 +23,8 @@ const ICONS: &[(&str, &[u8])] = &[
   (CHEVRON_DOWN, include_bytes!("../assets/icons/chevron-down.svg")),
   (CHECK, include_bytes!("../assets/icons/check.svg")),
   (AGENT, include_bytes!("../assets/icons/bot.svg")),
+  (NEW, include_bytes!("../assets/icons/square-plus.svg")),
+  (SEARCH, include_bytes!("../assets/icons/search.svg")),
 ];
 
 pub struct Assets;

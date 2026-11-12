@@ -73,6 +73,12 @@ pub(crate) struct Line {
   pub mark: Mark,
 }
 
+/// A session's name, as a line and a card title it: gwm leaves the name out
+/// when the session's artefacts carry none.
+pub(crate) fn title(session: &Session) -> String {
+  session.name.clone().unwrap_or_else(|| "unnamed session".to_owned())
+}
+
 /// The lines of a worktree's sessions, in gwm's order, the most recent first,
 /// and how many older ones are left out.
 pub(crate) fn lines(agents: &Agents, live: bool, ages: Ages) -> (Vec<Line>, usize) {
@@ -82,7 +88,7 @@ pub(crate) fn lines(agents: &Agents, live: bool, ages: Ages) -> (Vec<Line>, usiz
     .iter()
     .take(LISTED)
     .map(|session| Line {
-      title: session.name.clone().unwrap_or_else(|| "unnamed session".to_owned()),
+      title: title(session),
       kind: mixed.then(|| session.kind.clone()),
       mark: mark(session, live, ages),
     })
@@ -123,6 +129,12 @@ pub(crate) fn agent(carried: &Carried) -> impl IntoElement + use<> {
     Carried::Top { kind, .. } => (kind.clone(), theme::ink(0.5)),
     Carried::Unreadable => ("unreadable".to_owned(), theme::color(theme::WARNING)),
   };
+  agent_label(label, color)
+}
+
+/// An agent as a line's end names it: its kind in text, then the neutral
+/// glyph. On a worktree's row, and on a card of the "Working" panel.
+pub(crate) fn agent_label(label: String, color: gpui::Hsla) -> impl IntoElement + use<> {
   div()
     .flex_none()
     .flex()

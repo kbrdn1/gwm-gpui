@@ -52,7 +52,7 @@ pub(crate) fn title_bar(
             .justify_center()
             .rounded(px(6.))
             .hover(|button| button.bg(theme::selected()))
-            .on_click(cx.listener(|workspace, _, _, cx| workspace.toggle_sidebar(cx)))
+            .on_click(cx.listener(|workspace, _, window, cx| workspace.toggle_sidebar(window, cx)))
             .child(icon(assets::SIDEBAR, 14., theme::ink(0.5))),
         )
         // No list yet, no "New worktree": nothing would tell the new one apart.

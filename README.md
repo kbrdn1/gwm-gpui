@@ -3,7 +3,7 @@
 A native desktop app for [gwm](https://github.com/kbrdn1/gwm-cli), the git worktree manager, built on [GPUI](https://www.gpui.rs).
 
 > [!NOTE]
-> Early, macOS only. A glass window, after [Monocode Native](https://github.com/hardbeat920/monocode)'s, that shows the worktrees of a repo, kept live through gwm's daemon: a sidebar of worktrees grouped by branch age, and the selected one's details, from where it opens in an editor or a terminal, or is removed. A new worktree is created from the title bar.
+> Early, macOS only. A glass window, after [Monocode Native](https://github.com/hardbeat920/monocode)'s, that shows the worktrees of a repo, kept live through gwm's daemon: a sidebar of worktrees grouped by branch age, and the selected one's details, from where it opens in an editor or a terminal, or is removed. A new worktree is created from the sidebar's "New" row.
 
 ## Requirements
 
@@ -33,13 +33,29 @@ A Finder launch gets launchd's `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), without
 
 The sidebar's top row names the repo: a click on it lists the repos opened before, most recent first, and "Open folder…". A click on a repo, or a folder picked through "Open folder…", takes the place of the repo the window showed, or of the landing view. With ⌘ held, it opens in a new window instead, so several repos are followed at once, one per window. A repo another window already shows, from any of its worktrees, brings that window forward. The list keeps the last 10 repos, in `~/Library/Application Support/gwm-gpui/recent`, and hides those whose folder is gone.
 
-Up and down move the selection; a click selects a worktree. The title bar's sidebar button hides the sidebar. In the selected worktree's card, "Open in…" lists the editors and terminals installed in `/Applications`, `~/Applications` and the system's Utilities, and "Remove…" removes the worktree through gwm, keeping its branch, once you confirm.
+Up and down move the selection; a click selects a worktree. The title bar's sidebar button hides the sidebar, and closes the filter with it.
+
+The magnifier at the right of the repo's name, or ⌘F, opens a filter field under it. What you type narrows the worktrees shown to those whose row says it, whatever the case: the name, the branch, the issue (`#21`), the pull request (`PR 22`), or the agent of one of its sessions (`claude`). A section with no match is not drawn, and the list says when nothing matches. The selection stays among the rows shown: when the filter hides the selected worktree, the first row shown stands selected, and your own pick comes back once the filter is cleared, unless you picked another row meanwhile. Up and down walk the rows shown, from the field too. Escape, or the magnifier again, clears the field and closes it. In the selected worktree's card, "Open in…" lists the editors and terminals installed in `/Applications`, `~/Applications` and the system's Utilities, and "Remove…" removes the worktree through gwm, keeping its branch, once you confirm.
 
 A worktree gwm matched agent sessions to (Claude Code, Codex, opencode, Mistral Vibe) says so on its row. Its second line ends with the agent of its most recent session, and while gwm calls that session `active`, `active` stands where the branch's age is otherwise. The selected worktree lists its sessions under its row, most recent first: the session's name, then `active` or the age of its last activity. Five are listed, the older ones are counted. Where a worktree's sessions are not all of one agent, each line names its own. The app only reads sessions: it attaches and detaches none.
 
 `active` is gwm's word, for a session whose files changed in the last 300 seconds and that has not ended, and the app never works it out itself. It is shown on a live list, which gwm's daemon updates when the word changes. On a list that is not live, the word is as old as the list, so every session shows the age of its last activity instead.
 
-Once the list is shown, the title bar's `+` opens the "New worktree" form in the card: from an existing issue's number (gwm reads its description through the forge's CLI, `gh` or `glab`, and its type from its labels when `.gwm.toml` maps them to types, otherwise you give the type; a worktree that already has the issue is selected), from a type, an issue number and a description, or with a free name, which is the branch. Enter creates it, Escape closes the form, Tab moves to the next field. Once gwm is done, the new worktree is selected as soon as the list shows it. A refusal shows gwm's own words. gwm runs with no terminal to ask on: a `.gwm.toml` whose bootstrap commands you have not approved is refused, and `gwm trust add`, run in a terminal in the repo, approves it.
+While gwm calls a session of the repo `active`, a "Working" panel stands at the bottom of the sidebar: a count, then a card per active session, across the worktrees, with the session's name, its worktree and its agent. A click on a card selects its worktree. The panel is there on a live list only, and not at all when no session is active. gwm tells neither what a session is doing nor since when, so the cards do not either. A session gwm matched to several worktrees, started in one and pinned to another, has a card under each. The filter does not narrow the panel.
+
+Once the list is shown, the sidebar's "New" row, ⌘N, File > New Worktree or the title bar's `+` opens the "New worktree" form in the card: from an existing issue's number (gwm reads its description through the forge's CLI, `gh` or `glab`, and its type from its labels when `.gwm.toml` maps them to types, otherwise you give the type; a worktree that already has the issue is selected), from a type, an issue number and a description, or with a free name, which is the branch. Enter creates it, Escape closes the form, Tab moves to the next field. Once gwm is done, the new worktree is selected as soon as the list shows it. A refusal shows gwm's own words. gwm runs with no terminal to ask on: a `.gwm.toml` whose bootstrap commands you have not approved is refused, and `gwm trust add`, run in a terminal in the repo, approves it.
+
+### Shortcuts
+
+| Key | Does |
+|---|---|
+| ⌘N | opens the "New worktree" form, as the sidebar's "New" row and File > New Worktree |
+| ⌘F | opens the filter's field and gives it the focus |
+| ↑ ↓ | move the selection among the worktrees shown, from the list and from the filter's field |
+| Escape | closes the filter's field or the form, the one that has the focus first |
+| Enter, Tab | in the form: create the worktree, move to the next field |
+| ⌘O | File > Open…: a folder, in a new window |
+| ⌘Q | quits |
 
 ## How it talks to gwm
 
